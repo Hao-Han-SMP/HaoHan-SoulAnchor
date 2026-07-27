@@ -97,7 +97,9 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
     private final Map<String, UUID> anchorIdsByLocation = new HashMap<>();
     private final Map<UUID, Long> cooldowns = new ConcurrentHashMap<>();
     private final Map<UUID, Warmup> warmups = new ConcurrentHashMap<>();
+    private final List<UUID> idleParticleAnchorOrder = new ArrayList<>();
     private BukkitTask idleParticlesTask;
+    private int idleParticleCursor;
 
     @Override
     public void onEnable() {
@@ -112,7 +114,7 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
         }
 
         saveDefaultConfig();
-        migrateLegacyDisplayMaterial();
+        migrateLegacyConfig();
         saveResource("messages.yml", false);
         messagesFile = new File(getDataFolder(), "messages.yml");
         loadMessages();
@@ -129,7 +131,7 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
         getLogger().info("Loaded " + anchorsById.size() + " Soul Anchors.");
     }
 
-    private void migrateLegacyDisplayMaterial() {
+    private void migrateLegacyConfig() {
         boolean changed = false;
         String material = getConfig().getString("item.material", "BARRIER");
         if (material.equalsIgnoreCase("GRINDSTONE") || material.equalsIgnoreCase("JIGSAW")) {
@@ -143,6 +145,14 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
         }
         if (getConfig().getDouble("visuals.interaction-height", 1.1D) == 2.0D) {
             getConfig().set("visuals.interaction-height", 1.1D);
+            changed = true;
+        }
+        if (getConfig().getLong("visuals.idle-particle-interval-ticks", 20L) == 20L) {
+            getConfig().set("visuals.idle-particle-interval-ticks", 40L);
+            changed = true;
+        }
+        if (!getConfig().contains("visuals.idle-particle-batch-size")) {
+            getConfig().set("visuals.idle-particle-batch-size", 32);
             changed = true;
         }
         List<String> lore = new ArrayList<>(getConfig().getStringList("item.lore"));
@@ -219,6 +229,7 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
         anchor = spawnVisuals(anchor);
         anchorsById.put(anchor.id(), anchor);
         anchorIdsByLocation.put(locationKey(anchor.location()), anchor.id());
+        idleParticleAnchorOrder.add(anchor.id());
         saveAnchors();
 
         send(player, "anchor-placed", "{name}", anchor.name());
@@ -535,6 +546,7 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
             loadMessages();
             registerRecipe();
             refreshAnchorVisuals();
+            restartIdleParticles();
             send(sender, "reloaded");
             return true;
         }
@@ -1105,8 +1117,7 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
         if (itemModel != null) {
             meta.setItemModel(itemModel);
         }
-        // Giữ CMD để nhận diện/debug item cũ, nhưng resource pack mới không phụ thuộc
-        // vào nó.
+        // Keep CMD for legacy/debug item recognition; the resource pack uses item_model.
         meta.setCustomModelData(getConfig().getInt("item.custom-model-data", 910001));
         meta.getPersistentDataContainer().set(itemTypeKey, PersistentDataType.STRING,
                 getConfig().getString("item.id", "haohansmp:soul_anchor"));
@@ -1184,9 +1195,7 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
     }
 
     /**
-     * Stack chỉ dành cho ItemDisplay. Tách khỏi item craft/place để model không bao
-     * giờ
-     * phụ thuộc vào GRINDSTONE, BARRIER hay CustomModelData của vật phẩm nền.
+     * ItemDisplay-only stack. Kept separate from the craft/place item so the model does not depend on the base item.
      */
     private ItemStack createAnchorDisplayItem() {
         // The backing material controls the render layer even when ITEM_MODEL replaces
@@ -1253,6 +1262,7 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
     private void loadAnchors() {
         anchorsById.clear();
         anchorIdsByLocation.clear();
+        idleParticleAnchorOrder.clear();
         ConfigurationSection section = anchorsConfig.getConfigurationSection("anchors");
         if (section == null) {
             return;
@@ -1294,6 +1304,7 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
             anchor = spawnVisuals(anchor);
             anchorsById.put(anchor.id(), anchor);
             anchorIdsByLocation.put(locationKey(location), anchor.id());
+            idleParticleAnchorOrder.add(anchor.id());
         }
     }
 
@@ -1344,6 +1355,7 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
         Anchor anchor = anchorsById.remove(id);
         if (anchor != null) {
             anchorIdsByLocation.remove(locationKey(anchor.location()));
+            idleParticleAnchorOrder.remove(id);
             removeEntity(anchor.visualId());
             removeEntity(anchor.interactionId());
             saveAnchors();
@@ -1784,19 +1796,59 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
         if (!getConfig().getBoolean("visuals.idle-particles", true)) {
             return;
         }
-        long interval = Math.max(5L, getConfig().getLong("visuals.idle-particle-interval-ticks", 20L));
+        long interval = Math.max(20L, getConfig().getLong("visuals.idle-particle-interval-ticks", 40L));
+        int batchSize = Math.max(1, getConfig().getInt("visuals.idle-particle-batch-size", 32));
+        double viewDistance = Math.max(1D, getConfig().getDouble("visuals.particle-view-distance", 24D));
+        double viewDistanceSquared = viewDistance * viewDistance;
         idleParticlesTask = new BukkitRunnable() {
             @Override
             public void run() {
-                for (Anchor anchor : anchorsById.values()) {
-                    if (!isAnchorStillPlaced(anchor)) {
+                if (idleParticleAnchorOrder.isEmpty()) {
+                    idleParticleCursor = 0;
+                    return;
+                }
+                if (idleParticleCursor >= idleParticleAnchorOrder.size()) {
+                    idleParticleCursor = 0;
+                }
+
+                int processed = 0;
+                int scanned = 0;
+                while (processed < batchSize && scanned < idleParticleAnchorOrder.size()) {
+                    UUID anchorId = idleParticleAnchorOrder.get(idleParticleCursor);
+                    idleParticleCursor = (idleParticleCursor + 1) % idleParticleAnchorOrder.size();
+                    scanned++;
+
+                    Anchor anchor = anchorsById.get(anchorId);
+                    if (anchor == null) {
                         continue;
                     }
-                    Location loc = anchor.location().clone().add(0.5D, 0.9D, 0.5D);
-                    loc.getWorld().spawnParticle(Particle.SOUL_FIRE_FLAME, loc, 2, 0.15D, 0.25D, 0.15D, 0.005D);
+                    processed++;
+                    spawnIdleParticleForNearbyPlayers(anchor, viewDistanceSquared);
                 }
             }
         }.runTaskTimer(this, interval, interval);
+    }
+
+    private void restartIdleParticles() {
+        if (idleParticlesTask != null) {
+            idleParticlesTask.cancel();
+            idleParticlesTask = null;
+        }
+        idleParticleCursor = 0;
+        startIdleParticles();
+    }
+
+    private void spawnIdleParticleForNearbyPlayers(Anchor anchor, double viewDistanceSquared) {
+        World world = anchor.location().getWorld();
+        if (world == null) {
+            return;
+        }
+        Location loc = anchor.location().clone().add(0.5D, 0.9D, 0.5D);
+        for (Player player : world.getPlayers()) {
+            if (player.getLocation().distanceSquared(loc) <= viewDistanceSquared) {
+                player.spawnParticle(Particle.SOUL_FIRE_FLAME, loc, 2, 0.15D, 0.25D, 0.15D, 0.005D);
+            }
+        }
     }
 
     private record Anchor(UUID id, UUID ownerId, String name, Location location, float yaw, float pitch, long createdAt,

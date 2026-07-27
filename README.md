@@ -178,6 +178,9 @@ Một số key quan trọng:
 | `teleport.warmup-seconds` | `3` | Thời gian warmup. |
 | `teleport.cooldown-seconds` | `30` | Cooldown sau teleport. |
 | `cross-dimension.level-cost` | `30` | Level yêu cầu khi teleport khác dimension. |
+| `visuals.idle-particle-interval-ticks` | `40` | Số tick giữa các nhịp particle idle. |
+| `visuals.idle-particle-batch-size` | `32` | Số anchor tối đa được xử lý mỗi nhịp particle. |
+| `visuals.particle-view-distance` | `24` | Bán kính player có thể thấy particle idle. |
 
 ## Build Từ Mã Nguồn
 

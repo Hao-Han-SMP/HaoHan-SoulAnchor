@@ -72,5 +72,6 @@ visuals:
   interaction-width: 1.2
   interaction-height: 1.1
   idle-particles: true
-  idle-particle-interval-ticks: 20
+  idle-particle-interval-ticks: 40
+  idle-particle-batch-size: 32
   particle-view-distance: 24

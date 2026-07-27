@@ -178,6 +178,9 @@ Important keys:
 | `teleport.warmup-seconds` | `3` | Warmup duration. |
 | `teleport.cooldown-seconds` | `30` | Cooldown after teleport. |
 | `cross-dimension.level-cost` | `30` | Required level for cross-dimension teleport. |
+| `visuals.idle-particle-interval-ticks` | `40` | Ticks between idle particle passes. |
+| `visuals.idle-particle-batch-size` | `32` | Maximum anchors processed per idle particle pass. |
+| `visuals.particle-view-distance` | `24` | Viewer radius for idle anchor particles. |
 
 ## Build From Source
 
