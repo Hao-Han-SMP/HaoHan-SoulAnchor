@@ -208,3 +208,10 @@ target/anchor_spawn_point_fixed.zip
 - When updating the model, replace both the plugin jar and resource pack.
 - If old items still render incorrectly, get a fresh item with `/soulanchor give` after the new jar is running.
 - `rsp/` is local resource-pack source and should not be pushed unless intentionally needed.
+
+## License
+
+Copyright (C) 2026 HaoHanSMP.
+
+Soul Anchor is licensed under the GNU General Public License version 3 or later
+(`GPL-3.0-or-later`). See [LICENSE](LICENSE) for the full license text.

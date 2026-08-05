@@ -208,3 +208,10 @@ target/anchor_spawn_point_fixed.zip
 - Khi cập nhật model, hãy thay cả plugin jar và resource pack.
 - Nếu item cũ vẫn hiển thị sai, lấy item mới bằng `/soulanchor give` sau khi server đã chạy jar mới.
 - Thư mục `rsp/` là source resource pack local và không nên push nếu không thật sự cần.
+
+## Giấy phép
+
+Copyright (C) 2026 HaoHanSMP.
+
+Soul Anchor được phát hành theo GNU General Public License phiên bản 3 hoặc mới
+hơn (`GPL-3.0-or-later`). Xem [LICENSE](LICENSE) để biết toàn bộ điều khoản.
