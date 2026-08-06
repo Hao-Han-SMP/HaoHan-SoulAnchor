@@ -119,6 +119,7 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
     private final List<UUID> idleParticleAnchorOrder = new ArrayList<>();
     private BukkitTask idleParticlesTask;
     private int idleParticleCursor;
+    private BukkitTask anchorMaintenanceTask;
 
     @Override
     public void onEnable() {
@@ -146,6 +147,7 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
         Objects.requireNonNull(getCommand("soulanchor")).setExecutor(this);
         Objects.requireNonNull(getCommand("soulanchor")).setTabCompleter(this);
         Bukkit.getPluginManager().registerEvents(this, this);
+        startAnchorMaintenance();
         startIdleParticles();
         getLogger().info("Loaded " + anchorsById.size() + " Soul Anchors.");
     }
@@ -197,6 +199,9 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
             warmup.cancel(false);
         }
         warmups.clear();
+        if (anchorMaintenanceTask != null) {
+            anchorMaintenanceTask.cancel();
+        }
         if (idleParticlesTask != null) {
             idleParticlesTask.cancel();
         }
@@ -366,8 +371,7 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
             return;
         }
         Player player = event.getPlayer();
-        boolean owner = anchor.ownerId().equals(player.getUniqueId());
-        if (!owner || !player.hasPermission("soulanchor.break.own")) {
+        if (!canBreakAnchor(player, anchor)) {
             event.setCancelled(true);
             send(player, "anchor-not-owner");
             return;
@@ -454,8 +458,7 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
             if (breaker == null) {
                 return;
             }
-            boolean owner = anchor.ownerId().equals(breaker.getUniqueId());
-            if (!owner || !breaker.hasPermission("soulanchor.break.own")) {
+            if (!canBreakAnchor(breaker, anchor)) {
                 send(breaker, "anchor-not-owner");
                 return;
             }
@@ -1286,6 +1289,7 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
         if (section == null) {
             return;
         }
+        boolean removedStaleAnchor = false;
         for (String key : section.getKeys(false)) {
             ConfigurationSection node = section.getConfigurationSection(key);
             if (node == null) {
@@ -1315,15 +1319,27 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
                     sharedWith,
                     readUuid(node.getString("visual-uuid")),
                     readUuid(node.getString("interaction-uuid")));
-            if (location.getBlock().getType() == Material.AIR
-                    || location.getBlock().getType() == Material.GRINDSTONE
-                    || location.getBlock().getType() == Material.JIGSAW) {
+            Material blockType = location.getBlock().getType();
+            if (blockType == Material.GRINDSTONE || blockType == Material.JIGSAW) {
                 location.getBlock().setType(getAnchorBlockMaterial(), false);
+            } else if (blockType != getAnchorBlockMaterial()) {
+                removeEntity(anchor.visualId());
+                removeEntity(anchor.interactionId());
+                anchorsConfig.set("anchors." + key, null);
+                removedStaleAnchor = true;
+                continue;
             }
             anchor = spawnVisuals(anchor);
             anchorsById.put(anchor.id(), anchor);
             anchorIdsByLocation.put(locationKey(location), anchor.id());
             idleParticleAnchorOrder.add(anchor.id());
+        }
+        if (removedStaleAnchor) {
+            try {
+                anchorsConfig.save(anchorsFile);
+            } catch (IOException exception) {
+                getLogger().severe("Could not remove stale anchors from anchors.yml: " + exception.getMessage());
+            }
         }
     }
 
@@ -1427,6 +1443,12 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
 
     private boolean canAccessAnchor(UUID playerId, Anchor anchor) {
         return anchor.ownerId().equals(playerId) || anchor.sharedWith().contains(playerId);
+    }
+
+    private boolean canBreakAnchor(Player player, Anchor anchor) {
+        return player.hasPermission("soulanchor.admin")
+                || (anchor.ownerId().equals(player.getUniqueId())
+                        && player.hasPermission("soulanchor.break.own"));
     }
 
     private Optional<Anchor> findOwnedAnchor(UUID ownerId, String nameOrId) {
@@ -1843,6 +1865,32 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
                     }
                     processed++;
                     spawnIdleParticleForNearbyPlayers(anchor, viewDistanceSquared);
+                }
+            }
+        }.runTaskTimer(this, interval, interval);
+    }
+
+    private void startAnchorMaintenance() {
+        long interval = Math.max(5L, getConfig().getLong("visuals.anchor-maintenance-interval-ticks", 20L));
+        anchorMaintenanceTask = new BukkitRunnable() {
+            @Override
+            public void run() {
+                boolean changed = false;
+                for (Anchor anchor : new ArrayList<>(anchorsById.values())) {
+                    if (!isAnchorStillPlaced(anchor)) {
+                        removeAnchor(anchor.id());
+                        cancelWarmupsTouching(anchor.id());
+                        continue;
+                    }
+
+                    Anchor refreshed = spawnVisuals(anchor);
+                    if (!refreshed.equals(anchor)) {
+                        anchorsById.put(refreshed.id(), refreshed);
+                        changed = true;
+                    }
+                }
+                if (changed) {
+                    saveAnchors();
                 }
             }
         }.runTaskTimer(this, interval, interval);
