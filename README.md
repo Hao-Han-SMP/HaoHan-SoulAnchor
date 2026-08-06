@@ -10,7 +10,7 @@ Plugin dịch chuyển cá nhân dành cho HaoHan SMP.
 [![Paper](https://img.shields.io/badge/Paper-API-222222?style=for-the-badge&logo=paper&logoColor=white)](https://papermc.io/)
 [![Purpur](https://img.shields.io/badge/Purpur-Compatible-8A4FFF?style=for-the-badge)](https://purpurmc.org/)
 [![Java](https://img.shields.io/badge/Java-21-ED8B00?style=for-the-badge&logo=openjdk&logoColor=white)](https://openjdk.org/)
-[![Maven](https://img.shields.io/badge/Maven-Build-C71A36?style=for-the-badge&logo=apachemaven&logoColor=white)](https://maven.apache.org/)
+[![Gradle](https://img.shields.io/badge/Gradle-Build-02303A?style=for-the-badge&logo=gradle&logoColor=white)](https://gradle.org/)
 
 Ngôn ngữ: Tiếng Việt | [English](README.en.md)
 
@@ -29,7 +29,7 @@ Mỗi Soul Anchor là một điểm dịch chuyển vật lý. Người chơi ph
 | Paper API | Nền tảng API chính để phát triển plugin server. |
 | Purpur | Môi trường server khuyến nghị để triển khai. |
 | Java 21 | Ngôn ngữ và runtime chính của plugin. |
-| Maven | Quản lý dependency và build file `.jar`. |
+| Gradle | Quản lý dependency và build file `.jar`. |
 | Resource Pack | Hiển thị model và texture Soul Anchor tùy chỉnh. |
 
 ## Thành Phần Dự Án
@@ -74,7 +74,7 @@ Các mốc tiếp theo tiếp tục theo cùng công thức: level yêu cầu t�
 
 - Minecraft server chạy Paper hoặc Purpur `1.21.11`.
 - Java `21`.
-- Maven nếu cần build từ mã nguồn.
+- Gradle Wrapper đã được tích hợp sẵn nếu cần build từ mã nguồn.
 - Resource pack Soul Anchor để hiển thị model tùy chỉnh.
 
 ## Cài Đặt
@@ -184,19 +184,19 @@ Một số key quan trọng:
 Chạy lệnh sau tại thư mục gốc dự án:
 
 ```bash
-mvn clean package
+./gradlew clean build
 ```
 
-File jar Maven nằm trong:
+Trên Windows, chạy `gradlew.bat clean build`. File jar Gradle nằm trong:
 
 ```text
-target/soul-anchor-1.0.4.jar
+build/libs/soul-anchor-1.0.4.jar
 ```
 
 Trong workspace local có thể có thêm:
 
 ```text
-target/soul-anchor-1.0.4.jar
+build/libs/soul-anchor-1.0.4.jar
 target/anchor_spawn_point_fixed.zip
 ```
 

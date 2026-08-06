@@ -21,15 +21,21 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-          cache: maven
+          cache: gradle
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Make Gradle Wrapper executable
+        run: chmod +x gradlew
 
       - name: Build and test
-        run: mvn --batch-mode clean package
+        run: ./gradlew clean build
 
       - name: Collect deployable JAR
         run: |
           mkdir -p artifacts
-          find target -maxdepth 1 -type f -name '*.jar' \
+          find build/libs -maxdepth 1 -type f -name '*.jar' \
             ! -name 'original-*.jar' \
             ! -name '*-sources.jar' \
             ! -name '*-javadoc.jar' \

@@ -10,7 +10,7 @@ A personal teleport plugin for HaoHan SMP, built around physical Soul Anchors wi
 [![Paper](https://img.shields.io/badge/Paper-API-222222?style=for-the-badge&logo=paper&logoColor=white)](https://papermc.io/)
 [![Purpur](https://img.shields.io/badge/Purpur-Compatible-8A4FFF?style=for-the-badge)](https://purpurmc.org/)
 [![Java](https://img.shields.io/badge/Java-21-ED8B00?style=for-the-badge&logo=openjdk&logoColor=white)](https://openjdk.org/)
-[![Maven](https://img.shields.io/badge/Maven-Build-C71A36?style=for-the-badge&logo=apachemaven&logoColor=white)](https://maven.apache.org/)
+[![Gradle](https://img.shields.io/badge/Gradle-Build-02303A?style=for-the-badge&logo=gradle&logoColor=white)](https://gradle.org/)
 
 Language: [Tiếng Việt](README.md) | English
 
@@ -29,7 +29,7 @@ Each Soul Anchor is a physical teleport point. Players must interact with an anc
 | Paper API | Main server plugin API. |
 | Purpur | Recommended server runtime. |
 | Java 21 | Main language and runtime. |
-| Maven | Dependency management and jar build. |
+| Gradle | Dependency management and jar build. |
 | Resource Pack | Custom Soul Anchor model and textures. |
 
 ## Project Components
@@ -74,7 +74,7 @@ Later tiers use the same formula: the required level increases by `10` per `1,00
 
 - Paper or Purpur `1.21.11`.
 - Java `21`.
-- Maven if building from source.
+- The included Gradle Wrapper if building from source.
 - Soul Anchor resource pack for the custom model.
 
 ## Installation
@@ -184,19 +184,19 @@ Important keys:
 Run from the project root:
 
 ```bash
-mvn clean package
+./gradlew clean build
 ```
 
-Maven jar output:
+On Windows, run `gradlew.bat clean build`. Gradle jar output:
 
 ```text
-target/soul-anchor-1.0.4.jar
+build/libs/soul-anchor-1.0.4.jar
 ```
 
 The local workspace may also contain:
 
 ```text
-target/soul-anchor-1.0.4.jar
+build/libs/soul-anchor-1.0.4.jar
 target/anchor_spawn_point_fixed.zip
 ```
 
