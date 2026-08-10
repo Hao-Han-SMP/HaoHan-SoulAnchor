@@ -128,7 +128,7 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
         anchorNameKey = new NamespacedKey(this, "anchor_name");
         trustedPlayersKey = new NamespacedKey(this, "trusted_players");
         trustTargetKey = new NamespacedKey(this, "trust_target");
-        recipeKey = NamespacedKey.fromString(getConfig().getString("item.id", "haohansmp:soul_anchor"));
+        recipeKey = NamespacedKey.fromString(getConfig().getString("item.id", "haohan:soul_anchor"));
         if (recipeKey == null) {
             recipeKey = new NamespacedKey(this, "soul_anchor");
         }
@@ -1112,7 +1112,7 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
 
     private void registerRecipe() {
         Bukkit.removeRecipe(recipeKey);
-        recipeKey = NamespacedKey.fromString(getConfig().getString("item.id", "haohansmp:soul_anchor"));
+        recipeKey = NamespacedKey.fromString(getConfig().getString("item.id", "haohan:soul_anchor"));
         if (recipeKey == null) {
             recipeKey = new NamespacedKey(this, "soul_anchor");
         }
@@ -1135,14 +1135,14 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
         meta.setDisplayName(color(getConfig().getString("item.display-name", "&b&lSoul Anchor")));
         meta.setLore(getConfig().getStringList("item.lore").stream().map(this::color).toList());
         NamespacedKey itemModel = NamespacedKey.fromString(
-                getConfig().getString("item.item-model", "haohansmp:soul_anchor"));
+                getConfig().getString("item.item-model", "haohan:soul_anchor"));
         if (itemModel != null) {
             meta.setItemModel(itemModel);
         }
         // Keep CMD for legacy/debug item recognition; the resource pack uses item_model.
         meta.setCustomModelData(getConfig().getInt("item.custom-model-data", 910001));
         meta.getPersistentDataContainer().set(itemTypeKey, PersistentDataType.STRING,
-                getConfig().getString("item.id", "haohansmp:soul_anchor"));
+                getConfig().getString("item.id", "haohan:soul_anchor"));
         item.setItemMeta(meta);
         return item;
     }
@@ -1228,7 +1228,7 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
         ItemStack item = new ItemStack(getAnchorDisplayMaterial());
         ItemMeta meta = item.getItemMeta();
         NamespacedKey itemModel = NamespacedKey.fromString(
-                getConfig().getString("item.item-model", "haohansmp:soul_anchor"));
+                getConfig().getString("item.item-model", "haohan:soul_anchor"));
         if (itemModel != null) {
             meta.setItemModel(itemModel);
         }
@@ -1240,7 +1240,7 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
         if (item == null || item.getType() != getAnchorMaterial() || !item.hasItemMeta()) {
             return false;
         }
-        return getConfig().getString("item.id", "haohansmp:soul_anchor")
+        return getConfig().getString("item.id", "haohan:soul_anchor")
                 .equals(item.getItemMeta().getPersistentDataContainer().get(itemTypeKey, PersistentDataType.STRING));
     }
 

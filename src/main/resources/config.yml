@@ -3,9 +3,9 @@ limits:
   permission-based: true
 
 item:
-  id: haohansmp:soul_anchor
+  id: haohan:soul_anchor
   material: BARRIER
-  item-model: haohansmp:soul_anchor
+  item-model: haohan:soul_anchor
   placed-block: BARRIER
   custom-model-data: 910001
   display-name: "&b&lSoul Anchor"
@@ -13,7 +13,7 @@ item:
     - "&7A relic that binds a soul path to the world."
     - "&7Place it to create a teleport anchor."
     - ""
-    - "&fID: &7haohansmp:soul_anchor"
+    - "&fID: &7haohan:soul_anchor"
     - "&fLimit: &b3 Soul Anchors"
     - "&fRequirement: &a10 levels / 1000 blocks"
     - "&fXP charge: &e8 points / required level"

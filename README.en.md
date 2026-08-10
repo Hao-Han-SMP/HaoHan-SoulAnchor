@@ -164,7 +164,7 @@ Important keys:
 | Key | Default | Description |
 | --- | --- | --- |
 | `limits.default` | `3` | Default anchors per player. |
-| `item.id` | `haohansmp:soul_anchor` | Internal ID and item model. |
+| `item.id` | `haohan:soul_anchor` | Internal ID and item model. |
 | `item.material` | `BARRIER` | Base item used for crafting/giving; the custom model uses `item.item-model`. |
 | `item.placed-block` | `BARRIER` | Placeholder block used after placement. |
 | `distance.blocks-per-tier` | `1000` | Blocks per cost tier. |

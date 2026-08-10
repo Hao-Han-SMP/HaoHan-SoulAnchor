@@ -164,7 +164,7 @@ Một số key quan trọng:
 | Key | Mặc định | Mô tả |
 | --- | --- | --- |
 | `limits.default` | `3` | Số anchor mặc định mỗi người chơi. |
-| `item.id` | `haohansmp:soul_anchor` | ID nội bộ và item model. |
+| `item.id` | `haohan:soul_anchor` | ID nội bộ và item model. |
 | `item.material` | `BARRIER` | Item nền để craft/give; model riêng dùng `item.item-model`. |
 | `item.placed-block` | `BARRIER` | Block placeholder khi đặt anchor. |
 | `distance.blocks-per-tier` | `1000` | Số block mỗi tier chi phí. |
