@@ -193,13 +193,13 @@ Chạy lệnh sau tại thư mục gốc dự án:
 Trên Windows, chạy `gradlew.bat clean build`. File jar Gradle nằm trong:
 
 ```text
-build/libs/soul-anchor-1.0.4.jar
+build/libs/soul-anchor-1.0.5.jar
 ```
 
 Trong workspace local có thể có thêm:
 
 ```text
-build/libs/soul-anchor-1.0.4.jar
+build/libs/soul-anchor-1.0.5.jar
 target/anchor_spawn_point_fixed.zip
 ```
 

@@ -32,7 +32,19 @@ teleport:
   echo-shard-cost: 1
   echo-shard-free-distance: 2000
   experience-points-per-required-level: 8
-  warmup-seconds: 3
+  # Total cinematic transition duration. All animation phases are scaled
+  # across this duration, so increasing it slows the complete process evenly.
+  warmup-seconds: 8
+  # Cinematic duration is kept even when the player bypasses warmup.
+  animation-duration-seconds: 8
+  # Animation update cadence. Valid range: 1..4 server ticks.
+  # Lower values give the opening camera smooth phase more samples.
+  animation-update-interval-ticks: 1
+  warmup-push-distance: 0.35
+  # First smooth lift is distance-sensitive (2.5..5 blocks). The three
+  # cinematic states then add 15 blocks each, capped by this maximum.
+  animation-base-height-max: 5
+  animation-max-height: 35
   cooldown-seconds: 30
   movement-tolerance: 0.5
 

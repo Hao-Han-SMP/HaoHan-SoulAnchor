@@ -19,6 +19,22 @@
 
 package dev.haohansmp.soulanchor;
 
+import dev.haohansmp.soulanchor.command.SoulAnchorCommand;
+import dev.haohansmp.soulanchor.domain.Anchor;
+import dev.haohansmp.soulanchor.domain.Cost;
+import dev.haohansmp.soulanchor.domain.SharedAnchorGroup;
+import dev.haohansmp.soulanchor.domain.Validation;
+import dev.haohansmp.soulanchor.gui.AnchorMenuHolder;
+import dev.haohansmp.soulanchor.gui.SharedAnchorMenuHolder;
+import dev.haohansmp.soulanchor.gui.TrustMenuHolder;
+import dev.haohansmp.soulanchor.listener.SoulAnchorListener;
+import dev.haohansmp.soulanchor.repository.AnchorRepository;
+import dev.haohansmp.soulanchor.service.AnchorVisualService;
+import dev.haohansmp.soulanchor.service.ItemService;
+import dev.haohansmp.soulanchor.service.MessageService;
+import dev.haohansmp.soulanchor.service.TeleportCostService;
+import dev.haohansmp.soulanchor.service.TransientFakePlayer;
+
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.GameMode;
@@ -40,6 +56,8 @@ import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.Entity;
+import org.bukkit.entity.ArmorStand;
+import org.bukkit.entity.Display;
 import org.bukkit.entity.Interaction;
 import org.bukkit.entity.Item;
 import org.bukkit.entity.ItemDisplay;
@@ -76,9 +94,14 @@ import org.bukkit.inventory.meta.SkullMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.util.Transformation;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.util.StringUtil;
+import org.bukkit.util.Vector;
+import org.bukkit.util.EulerAngle;
+import org.joml.Quaternionf;
+import org.joml.Vector3f;
 
 import java.io.File;
 import java.io.IOException;
@@ -101,22 +124,27 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 
-public final class SoulAnchorPlugin extends JavaPlugin implements Listener, CommandExecutor, TabCompleter {
+public final class SoulAnchorPlugin extends JavaPlugin implements CommandExecutor, TabCompleter {
+
     private NamespacedKey itemTypeKey;
     private NamespacedKey anchorIdKey;
     private NamespacedKey anchorNameKey;
     private NamespacedKey trustedPlayersKey;
     private NamespacedKey trustTargetKey;
     private NamespacedKey recipeKey;
+    private ItemService itemService;
+    private TeleportCostService teleportCostService;
+    private AnchorVisualService visualService;
+    private SoulAnchorCommand commandHandler;
     private File anchorsFile;
     private File messagesFile;
-    private FileConfiguration anchorsConfig;
-    private FileConfiguration messages;
-    private final Map<UUID, Anchor> anchorsById = new HashMap<>();
-    private final Map<String, UUID> anchorIdsByLocation = new HashMap<>();
+    private MessageService messageService;
+    private AnchorRepository anchorRepository;
+    private Map<UUID, Anchor> anchorsById;
+    private Map<String, UUID> anchorIdsByLocation;
     private final Map<UUID, Long> cooldowns = new ConcurrentHashMap<>();
     private final Map<UUID, Warmup> warmups = new ConcurrentHashMap<>();
-    private final List<UUID> idleParticleAnchorOrder = new ArrayList<>();
+    private List<UUID> idleParticleAnchorOrder;
     private BukkitTask idleParticlesTask;
     private int idleParticleCursor;
     private BukkitTask anchorMaintenanceTask;
@@ -132,21 +160,29 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
         if (recipeKey == null) {
             recipeKey = new NamespacedKey(this, "soul_anchor");
         }
+        itemService = new ItemService(this, this::color, this::sanitizeName);
+        teleportCostService = new TeleportCostService(this);
 
         saveDefaultConfig();
         migrateLegacyConfig();
         saveResource("messages.yml", false);
         messagesFile = new File(getDataFolder(), "messages.yml");
+        messageService = new MessageService(this, messagesFile, this::color);
         loadMessages();
         anchorsFile = new File(getDataFolder(), "anchors.yml");
-        anchorsConfig = YamlConfiguration.loadConfiguration(anchorsFile);
+        anchorRepository = new AnchorRepository(this, anchorsFile);
+        anchorsById = anchorRepository.byId();
+        anchorIdsByLocation = anchorRepository.byLocation();
+        idleParticleAnchorOrder = anchorRepository.particleOrder();
+        visualService = new AnchorVisualService(this, itemService, anchorsById);
+        commandHandler = new SoulAnchorCommand(this);
 
         loadAnchors();
         registerRecipe();
 
         Objects.requireNonNull(getCommand("soulanchor")).setExecutor(this);
         Objects.requireNonNull(getCommand("soulanchor")).setTabCompleter(this);
-        Bukkit.getPluginManager().registerEvents(this, this);
+        Bukkit.getPluginManager().registerEvents(new SoulAnchorListener(this), this);
         startAnchorMaintenance();
         startIdleParticles();
         getLogger().info("Loaded " + anchorsById.size() + " Soul Anchors.");
@@ -251,9 +287,7 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
         Anchor anchor = new Anchor(UUID.randomUUID(), player.getUniqueId(), name, location, 0F, 0F,
                 Instant.now().toEpochMilli(), trustedPlayers, null, null);
         anchor = spawnVisuals(anchor);
-        anchorsById.put(anchor.id(), anchor);
-        anchorIdsByLocation.put(locationKey(anchor.location()), anchor.id());
-        idleParticleAnchorOrder.add(anchor.id());
+        anchorRepository.put(anchor);
         saveAnchors();
 
         send(player, "anchor-placed", "{name}", anchor.name());
@@ -432,10 +466,19 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
         if (warmup == null || event.getTo() == null) {
             return;
         }
-        double tolerance = getConfig().getDouble("teleport.movement-tolerance", 0.5D);
-        if (!sameWorld(warmup.startLocation, event.getTo())
-                || warmup.startLocation.distanceSquared(event.getTo()) > tolerance * tolerance) {
-            warmup.cancel(true);
+        // During the cinematic the player itself is the spectator camera. Its
+        // server teleports are intentional and must not be pinned back to the
+        // original body location by this movement guard.
+        if (event.getPlayer().getGameMode() == GameMode.SPECTATOR
+                && event.getPlayer().getSpectatorTarget() == null) {
+            return;
+        }
+        // The player is a spectator during the warmup. Keep the spectator body
+        // pinned just behind the original position instead of cancelling the
+        // warmup as soon as the client sends a movement packet.
+        if (!sameWorld(warmup.lockLocation, event.getTo())
+                || warmup.lockLocation.distanceSquared(event.getTo()) > 0.01D) {
+            event.setTo(warmup.lockLocation.clone());
         }
     }
 
@@ -537,186 +580,53 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-        if (args.length == 0) {
-            if (!(sender instanceof Player player)) {
-                send(sender, "player-only");
-                return true;
-            }
-            listAnchors(player, player);
-            return true;
-        }
-
-        String sub = args[0].toLowerCase(Locale.ROOT);
-        if (sub.equals("give")) {
-            return commandGive(sender, args);
-        }
-        if (sub.equals("list")) {
-            return commandList(sender, args);
-        }
-        if (sub.equals("rename")) {
-            return commandRename(sender, args);
-        }
-        if (sub.equals("share")) {
-            return commandShare(sender, args);
-        }
-        if (sub.equals("reload")) {
-            if (!sender.hasPermission("soulanchor.admin.reload")) {
-                send(sender, "no-permission");
-                return true;
-            }
-            reloadConfig();
-            loadMessages();
-            registerRecipe();
-            refreshAnchorVisuals();
-            restartIdleParticles();
-            send(sender, "reloaded");
-            return true;
-        }
-        sender.sendMessage(color("&3SoulAnchor &7commands: &f/soulanchor give|list|rename|share|reload"));
-        return true;
+        return commandHandler.execute(sender, command, label, args);
     }
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
-        if (args.length == 1) {
-            return StringUtil.copyPartialMatches(args[0], List.of("give", "list", "rename", "share", "reload"),
-                    new ArrayList<>());
-        }
-        if (args.length == 2 && List.of("give", "list").contains(args[0].toLowerCase(Locale.ROOT))) {
-            return null;
-        }
-        if (sender instanceof Player player && args.length == 2
-                && List.of("rename", "share").contains(args[0].toLowerCase(Locale.ROOT))) {
-            return StringUtil.copyPartialMatches(args[1],
-                    ownedAnchors(player.getUniqueId()).stream().map(Anchor::name).toList(), new ArrayList<>());
-        }
-        if (sender instanceof Player && args.length >= 3 && args[0].equalsIgnoreCase("share")) {
-            return StringUtil.copyPartialMatches(args[args.length - 1],
-                    Bukkit.getOnlinePlayers().stream().map(Player::getName).toList(), new ArrayList<>());
-        }
-        return List.of();
+        return commandHandler.complete(sender, command, alias, args);
     }
 
-    private boolean commandGive(CommandSender sender, String[] args) {
-        if (!sender.hasPermission("soulanchor.admin.give")) {
-            send(sender, "no-permission");
-            return true;
-        }
-        if (args.length < 2) {
-            sender.sendMessage(color("&cUsage: /soulanchor give <player> [amount]"));
-            return true;
-        }
-        Player target = Bukkit.getPlayerExact(args[1]);
-        if (target == null) {
-            sender.sendMessage(color("&cPlayer not found."));
-            return true;
-        }
-        int amount = args.length >= 3 ? parseInt(args[2], 1) : 1;
-        amount = Math.max(1, Math.min(64, amount));
-        target.getInventory().addItem(createAnchorItem(amount)).values()
-                .forEach(leftover -> target.getWorld().dropItemNaturally(target.getLocation(), leftover));
-        send(sender, "given", "{amount}", String.valueOf(amount), "{player}", target.getName());
-        return true;
+    // Package-level application API used by SoulAnchorCommand. Keeping this boundary here
+    // prevents command parsing from reaching into Bukkit/configuration internals.
+    public void sendMessage(CommandSender sender, String key, String... replacements) {
+        send(sender, key, replacements);
     }
 
-    private boolean commandList(CommandSender sender, String[] args) {
-        if (args.length >= 2 && sender.hasPermission("soulanchor.admin")) {
-            Player target = Bukkit.getPlayerExact(args[1]);
-            if (target == null) {
-                sender.sendMessage(color("&cPlayer not found."));
-                return true;
-            }
-            listAnchors(sender, target);
-            return true;
-        }
-        if (!(sender instanceof Player player)) {
-            send(sender, "player-only");
-            return true;
-        }
-        listAnchors(sender, player);
-        return true;
+    public String colorMessage(String input) {
+        return color(input);
     }
 
-    private boolean commandRename(CommandSender sender, String[] args) {
-        if (!(sender instanceof Player player)) {
-            send(sender, "player-only");
-            return true;
-        }
-        if (!player.hasPermission("soulanchor.rename")) {
-            send(player, "no-permission");
-            return true;
-        }
-        if (args.length < 3) {
-            player.sendMessage(color("&cUsage: /soulanchor rename <anchor> <new-name>"));
-            return true;
-        }
-        Anchor anchor = null;
-        int newNameStart = -1;
-        for (int split = args.length - 1; split >= 2; split--) {
-            String anchorQuery = String.join(" ", List.of(args).subList(1, split));
-            anchor = findOwnedAnchor(player.getUniqueId(), anchorQuery).orElse(null);
-            if (anchor != null) {
-                newNameStart = split;
-                break;
-            }
-        }
-        if (anchor == null) {
-            send(player, "not-anchor");
-            return true;
-        }
-        String name = sanitizeName(String.join(" ", List.of(args).subList(newNameStart, args.length)));
-        Anchor renamed = anchor.withName(name);
-        anchorsById.put(renamed.id(), renamed);
+    public int parseIntValue(String raw, int fallback) {
+        return parseInt(raw, fallback);
+    }
+
+    public ItemStack createAnchorItemValue(int amount) {
+        return createAnchorItem(amount);
+    }
+
+    public void updateAnchor(Anchor anchor) {
+        anchorRepository.put(anchor);
+    }
+
+    public void saveAnchorData() {
         saveAnchors();
-        send(player, "anchor-renamed", "{name}", renamed.name());
-        return true;
     }
 
-    private boolean commandShare(CommandSender sender, String[] args) {
-        if (!(sender instanceof Player player)) {
-            send(sender, "player-only");
-            return true;
-        }
-        if (!player.hasPermission("soulanchor.share")) {
-            send(player, "no-permission");
-            return true;
-        }
-        if (args.length < 3) {
-            player.sendMessage(color("&cUsage: /soulanchor share <anchor> <player>"));
-            return true;
-        }
-
-        String targetName = args[args.length - 1];
-        Player target = Bukkit.getPlayerExact(targetName);
-        if (target == null) {
-            send(player, "player-not-found");
-            return true;
-        }
-        if (target.getUniqueId().equals(player.getUniqueId())) {
-            send(player, "share-self");
-            return true;
-        }
-
-        String anchorQuery = String.join(" ", List.of(args).subList(1, args.length - 1));
-        Anchor anchor = findOwnedAnchor(player.getUniqueId(), anchorQuery).orElse(null);
-        if (anchor == null) {
-            send(player, "not-anchor");
-            return true;
-        }
-        if (anchor.sharedWith().contains(target.getUniqueId())) {
-            send(player, "anchor-already-shared", "{anchor}", anchor.name(), "{player}", target.getName());
-            return true;
-        }
-
-        Anchor shared = anchor.withSharedPlayer(target.getUniqueId());
-        anchorsById.put(shared.id(), shared);
-        saveAnchors();
-        send(player, "anchor-shared", "{anchor}", shared.name(), "{player}", target.getName());
-        send(target, "anchor-shared-received", "{anchor}", shared.name(), "{player}", player.getName());
-        return true;
+    public String sanitizeNameValue(String input) {
+        return sanitizeName(input);
     }
 
-    private void listAnchors(CommandSender sender, Player owner) {
+    public void reloadPluginState() {
+        reloadConfig();
+        loadMessages();
+        registerRecipe();
+        refreshAnchorVisuals();
+        restartIdleParticles();
+    }
+
+    public void listAnchors(CommandSender sender, Player owner) {
         List<Anchor> anchors = accessibleAnchors(owner.getUniqueId());
         int ownedCount = ownedAnchors(owner.getUniqueId()).size();
         int sharedCount = anchors.size() - ownedCount;
@@ -754,18 +664,23 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
             return;
         }
 
-        int warmupSeconds = player.hasPermission("soulanchor.bypass.warmup") ? 0
-                : getConfig().getInt("teleport.warmup-seconds", 3);
-        if (warmupSeconds <= 0) {
-            finishTeleport(player, sourceId, targetId);
-            return;
-        }
+        // The cinematic must still run for admins with bypass.warmup.
+        // Bypass skips the countdown duration, but never skips the soul effect.
+        int configuredWarmupSeconds = getConfig().getInt("teleport.warmup-seconds", 5);
+        boolean bypassWarmup = player.hasPermission("soulanchor.bypass.warmup");
+        int countdownSeconds = bypassWarmup
+                ? 1 : Math.max(1, configuredWarmupSeconds);
+        int animationSeconds = Math.max(1, Math.max(configuredWarmupSeconds,
+                getConfig().getInt("teleport.animation-duration-seconds", 8)));
 
-        send(player, "warmup-start", "{seconds}", String.valueOf(warmupSeconds));
-        Warmup warmup = new Warmup(player, sourceId, targetId, player.getLocation().clone(), warmupSeconds);
+        send(player, "warmup-start", "{seconds}", String.valueOf(countdownSeconds));
+        Warmup warmup = new Warmup(player, sourceId, targetId, player.getLocation().clone(), animationSeconds);
         warmups.put(player.getUniqueId(), warmup);
+        long animationIntervalTicks = Math.max(1L, Math.min(4L,
+                getConfig().getLong("teleport.animation-update-interval-ticks", 1L)));
         warmup.task = new BukkitRunnable() {
-            int remainingTicks = warmupSeconds;
+            int elapsedTicks;
+            final int totalTicks = animationSeconds * 20;
 
             @Override
             public void run() {
@@ -773,18 +688,21 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
                     cancel();
                     return;
                 }
-                if (remainingTicks > 0) {
-                    send(player, "warmup-tick", "{seconds}", String.valueOf(remainingTicks));
-                    player.getWorld().spawnParticle(Particle.SOUL_FIRE_FLAME, player.getLocation().add(0, 1, 0), 8, 0.4,
-                            0.6, 0.4, 0.01);
-                    remainingTicks--;
+                if (elapsedTicks < totalTicks) {
+                    if (!bypassWarmup && elapsedTicks % 20 == 0) {
+                        int remainingSeconds = Math.max(1, (totalTicks - elapsedTicks + 19) / 20);
+                        send(player, "warmup-tick", "{seconds}", String.valueOf(remainingSeconds));
+                    }
+                    warmup.playTickEffect((elapsedTicks + animationIntervalTicks) / (double) totalTicks);
+                    elapsedTicks += (int) animationIntervalTicks;
                     return;
                 }
                 warmups.remove(player.getUniqueId());
                 cancel();
+                warmup.finishEffect();
                 finishTeleport(player, sourceId, targetId);
             }
-        }.runTaskTimer(this, 0L, 20L);
+        }.runTaskTimer(this, 0L, animationIntervalTicks);
     }
 
     private void finishTeleport(Player player, UUID sourceId, UUID targetId) {
@@ -1094,7 +1012,7 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
         }
         if (anchor.sharedWith().contains(targetId)) {
             Anchor updated = anchor.withoutSharedPlayer(targetId);
-            anchorsById.put(updated.id(), updated);
+            anchorRepository.put(updated);
             saveAnchors();
             send(player, "anchor-unshared", "{anchor}", updated.name(), "{player}", target.getName());
             send(target, "anchor-unshared-received", "{anchor}", updated.name(), "{player}", player.getName());
@@ -1103,7 +1021,7 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
         }
 
         Anchor updated = anchor.withSharedPlayer(targetId);
-        anchorsById.put(updated.id(), updated);
+        anchorRepository.put(updated);
         saveAnchors();
         send(player, "anchor-shared", "{anchor}", updated.name(), "{player}", target.getName());
         send(target, "anchor-shared-received", "{anchor}", updated.name(), "{player}", player.getName());
@@ -1130,118 +1048,42 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
     }
 
     private ItemStack createAnchorItem(int amount) {
-        ItemStack item = new ItemStack(getAnchorMaterial(), amount);
-        ItemMeta meta = item.getItemMeta();
-        meta.setDisplayName(color(getConfig().getString("item.display-name", "&b&lSoul Anchor")));
-        meta.setLore(getConfig().getStringList("item.lore").stream().map(this::color).toList());
-        NamespacedKey itemModel = NamespacedKey.fromString(
-                getConfig().getString("item.item-model", "haohan:soul_anchor"));
-        if (itemModel != null) {
-            meta.setItemModel(itemModel);
-        }
-        // Keep CMD for legacy/debug item recognition; the resource pack uses item_model.
-        meta.setCustomModelData(getConfig().getInt("item.custom-model-data", 910001));
-        meta.getPersistentDataContainer().set(itemTypeKey, PersistentDataType.STRING,
-                getConfig().getString("item.id", "haohan:soul_anchor"));
-        item.setItemMeta(meta);
-        return item;
+        return itemService.createAnchorItem(amount);
     }
 
     private ItemStack createPortableAnchorItem(Anchor anchor) {
-        ItemStack item = createAnchorItem(1);
-        ItemMeta meta = item.getItemMeta();
-        PersistentDataContainer pdc = meta.getPersistentDataContainer();
-        pdc.set(anchorNameKey, PersistentDataType.STRING, anchor.name());
-        if (!anchor.sharedWith().isEmpty()) {
-            String trustedPlayers = anchor.sharedWith().stream().map(UUID::toString).sorted()
-                    .collect(Collectors.joining(","));
-            pdc.set(trustedPlayersKey, PersistentDataType.STRING, trustedPlayers);
-        }
-        List<String> lore = new ArrayList<>(meta.getLore() == null ? List.of() : meta.getLore());
-        lore.add("");
-        lore.add(color("&7Saved name: &f" + anchor.name()));
-        lore.add(color("&7Saved trust: &f" + anchor.sharedWith().size() + " player(s)"));
-        meta.setLore(lore);
-        item.setItemMeta(meta);
-        return item;
+        return itemService.createPortableAnchorItem(anchor);
     }
 
     private String readPortableAnchorName(ItemStack item) {
-        if (item == null || !item.hasItemMeta()) {
-            return null;
-        }
-        String name = item.getItemMeta().getPersistentDataContainer().get(anchorNameKey, PersistentDataType.STRING);
-        return name == null || name.isBlank() ? null : sanitizeName(name);
+        return itemService.readPortableAnchorName(item);
     }
 
     private Set<UUID> readPortableTrustedPlayers(ItemStack item) {
-        Set<UUID> trustedPlayers = new HashSet<>();
-        if (item == null || !item.hasItemMeta()) {
-            return trustedPlayers;
-        }
-        String raw = item.getItemMeta().getPersistentDataContainer()
-                .get(trustedPlayersKey, PersistentDataType.STRING);
-        if (raw == null || raw.isBlank()) {
-            return trustedPlayers;
-        }
-        for (String entry : raw.split(",")) {
-            UUID playerId = readUuid(entry);
-            if (playerId != null) {
-                trustedPlayers.add(playerId);
-            }
-        }
-        return trustedPlayers;
+        return itemService.readPortableTrustedPlayers(item);
     }
 
     private ItemStack playerHead(Player target, String displayName, List<String> lore) {
-        ItemStack item = namedItem(Material.PLAYER_HEAD, displayName, lore);
-        SkullMeta meta = (SkullMeta) item.getItemMeta();
-        meta.setPlayerProfile(target.getPlayerProfile());
-        meta.getPersistentDataContainer().set(trustTargetKey, PersistentDataType.STRING,
-                target.getUniqueId().toString());
-        item.setItemMeta(meta);
-        return item;
+        return itemService.playerHead(target, displayName, lore);
     }
 
     private String playerName(OfflinePlayer player) {
-        String name = player.getName();
-        return name == null || name.isBlank() ? player.getUniqueId().toString().substring(0, 8) : name;
+        return itemService.playerName(player);
     }
 
     private Optional<UUID> readTrustTarget(ItemStack item) {
-        if (item == null || !item.hasItemMeta()) {
-            return Optional.empty();
-        }
-        return Optional.ofNullable(readUuid(item.getItemMeta().getPersistentDataContainer()
-                .get(trustTargetKey, PersistentDataType.STRING)));
+        return itemService.readTrustTarget(item);
     }
 
     /**
      * ItemDisplay-only stack. Kept separate from the craft/place item so the model does not depend on the base item.
      */
     private ItemStack createAnchorDisplayItem() {
-        // The backing material controls the render layer even when ITEM_MODEL replaces
-        // the visible geometry. A non-block item such as PAPER is rendered on the
-        // translucent item sheet by the client, which makes the whole custom model
-        // look transparent with some shaders. Use an opaque block item so the model is
-        // submitted to the solid render layer, like a furnace item model.
-        ItemStack item = new ItemStack(getAnchorDisplayMaterial());
-        ItemMeta meta = item.getItemMeta();
-        NamespacedKey itemModel = NamespacedKey.fromString(
-                getConfig().getString("item.item-model", "haohan:soul_anchor"));
-        if (itemModel != null) {
-            meta.setItemModel(itemModel);
-        }
-        item.setItemMeta(meta);
-        return item;
+        return itemService.createAnchorDisplayItem();
     }
 
     private boolean isSoulAnchorItem(ItemStack item) {
-        if (item == null || item.getType() != getAnchorMaterial() || !item.hasItemMeta()) {
-            return false;
-        }
-        return getConfig().getString("item.id", "haohan:soul_anchor")
-                .equals(item.getItemMeta().getPersistentDataContainer().get(itemTypeKey, PersistentDataType.STRING));
+        return itemService.isSoulAnchorItem(item);
     }
 
     private ItemStack namedItem(Material material, String name) {
@@ -1249,152 +1091,35 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
     }
 
     private ItemStack namedItem(Material material, String name, List<String> lore) {
-        ItemStack item = new ItemStack(material);
-        ItemMeta meta = item.getItemMeta();
-        meta.setDisplayName(color(name));
-        if (!lore.isEmpty()) {
-            meta.setLore(lore.stream().map(this::color).toList());
-        }
-        item.setItemMeta(meta);
-        return item;
+        return itemService.namedItem(material, name, lore);
     }
 
     private void writeAnchorId(ItemStack item, UUID id) {
-        ItemMeta meta = item.getItemMeta();
-        meta.getPersistentDataContainer().set(anchorIdKey, PersistentDataType.STRING, id.toString());
-        item.setItemMeta(meta);
+        itemService.writeAnchorId(item, id);
     }
 
     private Optional<UUID> readAnchorId(ItemStack item) {
-        if (item == null || !item.hasItemMeta()) {
-            return Optional.empty();
-        }
-        PersistentDataContainer pdc = item.getItemMeta().getPersistentDataContainer();
-        String raw = pdc.get(anchorIdKey, PersistentDataType.STRING);
-        if (raw == null) {
-            return Optional.empty();
-        }
-        try {
-            return Optional.of(UUID.fromString(raw));
-        } catch (IllegalArgumentException ignored) {
-            return Optional.empty();
-        }
+        return itemService.readAnchorId(item);
     }
 
     private void loadAnchors() {
-        anchorsById.clear();
-        anchorIdsByLocation.clear();
-        idleParticleAnchorOrder.clear();
-        ConfigurationSection section = anchorsConfig.getConfigurationSection("anchors");
-        if (section == null) {
-            return;
-        }
-        boolean removedStaleAnchor = false;
-        for (String key : section.getKeys(false)) {
-            ConfigurationSection node = section.getConfigurationSection(key);
-            if (node == null) {
-                continue;
-            }
-            World world = Bukkit.getWorld(UUID.fromString(node.getString("world-uuid")));
-            if (world == null) {
-                world = Bukkit.getWorld(node.getString("world-name", ""));
-            }
-            if (world == null) {
-                getLogger().warning("Skipping Soul Anchor " + key + " because its world is not loaded.");
-                continue;
-            }
-            Location location = new Location(world, node.getInt("x"), node.getInt("y"), node.getInt("z"));
-            Set<UUID> sharedWith = node.getStringList("shared-with").stream()
-                    .map(this::readUuid)
-                    .filter(Objects::nonNull)
-                    .collect(Collectors.toUnmodifiableSet());
-            Anchor anchor = new Anchor(
-                    UUID.fromString(key),
-                    UUID.fromString(node.getString("owner")),
-                    node.getString("name", "Soul Anchor"),
-                    location,
-                    (float) node.getDouble("yaw", 0D),
-                    (float) node.getDouble("pitch", 0D),
-                    node.getLong("created-at", System.currentTimeMillis()),
-                    sharedWith,
-                    readUuid(node.getString("visual-uuid")),
-                    readUuid(node.getString("interaction-uuid")));
-            Material blockType = location.getBlock().getType();
-            if (blockType == Material.GRINDSTONE || blockType == Material.JIGSAW) {
-                location.getBlock().setType(getAnchorBlockMaterial(), false);
-            } else if (blockType != getAnchorBlockMaterial()) {
-                removeEntity(anchor.visualId());
-                removeEntity(anchor.interactionId());
-                anchorsConfig.set("anchors." + key, null);
-                removedStaleAnchor = true;
-                continue;
-            }
-            anchor = spawnVisuals(anchor);
-            anchorsById.put(anchor.id(), anchor);
-            anchorIdsByLocation.put(locationKey(location), anchor.id());
-            idleParticleAnchorOrder.add(anchor.id());
-        }
-        if (removedStaleAnchor) {
-            try {
-                anchorsConfig.save(anchorsFile);
-            } catch (IOException exception) {
-                getLogger().severe("Could not remove stale anchors from anchors.yml: " + exception.getMessage());
-            }
-        }
+        anchorRepository.load(getAnchorBlockMaterial(), this::spawnVisuals, this::removeEntity);
     }
 
     private void saveAnchors() {
-        anchorsConfig.set("anchors", null);
-        for (Anchor anchor : anchorsById.values()) {
-            String path = "anchors." + anchor.id();
-            Location loc = anchor.location();
-            anchorsConfig.set(path + ".owner", anchor.ownerId().toString());
-            anchorsConfig.set(path + ".name", anchor.name());
-            anchorsConfig.set(path + ".world-uuid", loc.getWorld().getUID().toString());
-            anchorsConfig.set(path + ".world-name", loc.getWorld().getName());
-            anchorsConfig.set(path + ".x", loc.getBlockX());
-            anchorsConfig.set(path + ".y", loc.getBlockY());
-            anchorsConfig.set(path + ".z", loc.getBlockZ());
-            anchorsConfig.set(path + ".yaw", anchor.yaw());
-            anchorsConfig.set(path + ".pitch", anchor.pitch());
-            anchorsConfig.set(path + ".created-at", anchor.createdAt());
-            anchorsConfig.set(path + ".shared-with",
-                    anchor.sharedWith().stream().map(UUID::toString).sorted().toList());
-            anchorsConfig.set(path + ".visual-uuid", anchor.visualId() == null ? null : anchor.visualId().toString());
-            anchorsConfig.set(path + ".interaction-uuid",
-                    anchor.interactionId() == null ? null : anchor.interactionId().toString());
-        }
-        try {
-            anchorsConfig.save(anchorsFile);
-        } catch (IOException exception) {
-            getLogger().severe("Could not save anchors.yml: " + exception.getMessage());
-        }
+        anchorRepository.save();
     }
 
     private Optional<Anchor> anchorAt(Block block) {
-        UUID id = anchorIdsByLocation.get(locationKey(block.getLocation()));
-        if (id == null) {
-            return Optional.empty();
-        }
-        return Optional.ofNullable(anchorsById.get(id));
+        return anchorRepository.at(block);
     }
 
     private boolean isAnchorStillPlaced(Anchor anchor) {
-        return anchor != null
-                && anchorsById.containsKey(anchor.id())
-                && anchor.location().getBlock().getType() == getAnchorBlockMaterial()
-                && anchorIdsByLocation.containsKey(locationKey(anchor.location()));
+        return anchorRepository.isStillPlaced(anchor, getAnchorBlockMaterial());
     }
 
     private void removeAnchor(UUID id) {
-        Anchor anchor = anchorsById.remove(id);
-        if (anchor != null) {
-            anchorIdsByLocation.remove(locationKey(anchor.location()));
-            idleParticleAnchorOrder.remove(id);
-            removeEntity(anchor.visualId());
-            removeEntity(anchor.interactionId());
-            saveAnchors();
-        }
+        anchorRepository.remove(id, this::removeEntity);
     }
 
     private void cancelWarmupsTouching(UUID anchorId) {
@@ -1405,11 +1130,8 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
         }
     }
 
-    private List<Anchor> ownedAnchors(UUID ownerId) {
-        return anchorsById.values().stream()
-                .filter(anchor -> anchor.ownerId().equals(ownerId))
-                .sorted(Comparator.comparingLong(Anchor::createdAt))
-                .collect(Collectors.toList());
+    public List<Anchor> ownedAnchors(UUID ownerId) {
+        return anchorRepository.owned(ownerId);
     }
 
     private List<Anchor> accessibleAnchors(UUID playerId) {
@@ -1451,12 +1173,8 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
                         && player.hasPermission("soulanchor.break.own"));
     }
 
-    private Optional<Anchor> findOwnedAnchor(UUID ownerId, String nameOrId) {
-        String query = nameOrId.toLowerCase(Locale.ROOT);
-        return ownedAnchors(ownerId).stream()
-                .filter(anchor -> anchor.id().toString().equalsIgnoreCase(nameOrId)
-                        || anchor.name().toLowerCase(Locale.ROOT).equals(query))
-                .findFirst();
+    public Optional<Anchor> findOwnedAnchor(UUID ownerId, String nameOrId) {
+        return anchorRepository.findOwned(ownerId, nameOrId);
     }
 
     private String nextDefaultName(UUID ownerId) {
@@ -1491,262 +1209,56 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
     }
 
     private Cost calculateCost(Location source, Location target) {
-        int requiredLevels;
-        int shards;
-        if (!sameWorld(source, target)) {
-            requiredLevels = Math.max(0, getConfig().getInt("cross-dimension.level-cost", 30));
-            shards = Math.max(0, getConfig().getInt("cross-dimension.echo-shard-cost", 1));
-        } else {
-            double dx = target.getX() - source.getX();
-            double dz = target.getZ() - source.getZ();
-            double distance = Math.sqrt(dx * dx + dz * dz);
-            int blocksPerTier = Math.max(1, getConfig().getInt("distance.blocks-per-tier", 1000));
-            int levelsPerTier = Math.max(1, getConfig().getInt("distance.levels-per-tier", 10));
-            int minCost = Math.max(0, getConfig().getInt("distance.minimum-level-cost", 10));
-            requiredLevels = Math.max(minCost, (int) Math.ceil(distance / blocksPerTier) * levelsPerTier);
-            double freeShardDistance = Math.max(0D, getConfig().getDouble("teleport.echo-shard-free-distance", 2000D));
-            shards = distance <= freeShardDistance
-                    ? 0
-                    : Math.max(0, getConfig().getInt("teleport.echo-shard-cost", 1));
-        }
-
-        int pointsPerRequiredLevel = Math.max(0,
-                getConfig().getInt("teleport.experience-points-per-required-level", 8));
-        int experiencePoints = (int) Math.min(Integer.MAX_VALUE, (long) requiredLevels * pointsPerRequiredLevel);
-        return new Cost(requiredLevels, experiencePoints, shards);
+        return teleportCostService.calculate(source, target);
     }
 
     private String formatDistance(Location source, Location target) {
-        if (!sameWorld(source, target)) {
-            return "cross-dimension";
-        }
-        double dx = target.getX() - source.getX();
-        double dz = target.getZ() - source.getZ();
-        return String.valueOf((int) Math.round(Math.sqrt(dx * dx + dz * dz)));
+        return teleportCostService.formatDistance(source, target);
     }
 
     private int countEchoShards(Player player) {
-        int count = 0;
-        for (ItemStack item : player.getInventory().getContents()) {
-            if (item != null && item.getType() == Material.ECHO_SHARD) {
-                count += item.getAmount();
-            }
-        }
-        return count;
+        return teleportCostService.countEchoShards(player);
     }
 
     private void removeEchoShards(Player player, int amount) {
-        int remaining = amount;
-        ItemStack[] contents = player.getInventory().getContents();
-        for (int i = 0; i < contents.length && remaining > 0; i++) {
-            ItemStack item = contents[i];
-            if (item == null || item.getType() != Material.ECHO_SHARD) {
-                continue;
-            }
-            int take = Math.min(remaining, item.getAmount());
-            item.setAmount(item.getAmount() - take);
-            remaining -= take;
-            if (item.getAmount() <= 0) {
-                contents[i] = null;
-            }
-        }
-        player.getInventory().setContents(contents);
+        teleportCostService.removeEchoShards(player, amount);
     }
 
     private Location findSafeLocation(Location anchorLocation) {
-        int horizontal = getConfig().getInt("safe-location.horizontal-radius", 3);
-        int vertical = getConfig().getInt("safe-location.vertical-radius", 4);
-        World world = anchorLocation.getWorld();
-        int baseX = anchorLocation.getBlockX();
-        int baseY = anchorLocation.getBlockY();
-        int baseZ = anchorLocation.getBlockZ();
-
-        for (int dy = 0; dy <= vertical; dy++) {
-            for (int sign : new int[] { 1, -1 }) {
-                if (dy == 0 && sign < 0) {
-                    continue;
-                }
-                int y = baseY + dy * sign;
-                for (int radius = 1; radius <= horizontal; radius++) {
-                    for (int x = baseX - radius; x <= baseX + radius; x++) {
-                        for (int z = baseZ - radius; z <= baseZ + radius; z++) {
-                            if (Math.max(Math.abs(x - baseX), Math.abs(z - baseZ)) != radius) {
-                                continue;
-                            }
-                            Location candidate = new Location(world, x + 0.5D, y, z + 0.5D, anchorLocation.getYaw(),
-                                    anchorLocation.getPitch());
-                            if (isSafe(candidate)) {
-                                return candidate;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        return null;
-    }
-
-    private boolean isSafe(Location location) {
-        World world = location.getWorld();
-        if (world == null || location.getBlockY() <= world.getMinHeight()
-                || location.getBlockY() >= world.getMaxHeight() - 2) {
-            return false;
-        }
-        WorldBorder border = world.getWorldBorder();
-        if (!border.isInside(location)) {
-            return false;
-        }
-        Block feet = location.getBlock();
-        Block head = feet.getRelative(0, 1, 0);
-        Block below = feet.getRelative(0, -1, 0);
-        return feet.isPassable()
-                && head.isPassable()
-                && below.getType().isSolid()
-                && !isHazard(feet.getType())
-                && !isHazard(head.getType())
-                && !isHazard(below.getType());
-    }
-
-    private boolean isHazard(Material material) {
-        return material == Material.LAVA
-                || material == Material.FIRE
-                || material == Material.SOUL_FIRE
-                || material == Material.CACTUS
-                || material == Material.POWDER_SNOW
-                || material == Material.MAGMA_BLOCK
-                || material == Material.CAMPFIRE
-                || material == Material.SOUL_CAMPFIRE
-                || material == Material.END_PORTAL
-                || material == Material.NETHER_PORTAL;
+        return teleportCostService.findSafeLocation(anchorLocation);
     }
 
     private boolean isWorldBlocked(World world) {
-        String mode = getConfig().getString("worlds.mode", "blacklist").toLowerCase(Locale.ROOT);
-        List<String> worlds = getConfig().getStringList("worlds.list");
-        boolean listed = worlds.stream().anyMatch(name -> name.equalsIgnoreCase(world.getName()));
-        return mode.equals("blacklist") ? listed : !listed;
+        return teleportCostService.isWorldBlocked(world);
     }
 
     private Material getAnchorMaterial() {
-        String configured = getConfig().getString("item.material", "BARRIER");
-        Material material = Material.matchMaterial(configured);
-        return material == null ? Material.BARRIER : material;
+        return itemService.anchorMaterial();
     }
 
     private Material getAnchorBlockMaterial() {
-        String configured = getConfig().getString("item.placed-block", "BARRIER");
-        Material material = Material.matchMaterial(configured);
-        return material == null ? Material.BARRIER : material;
+        return itemService.anchorBlockMaterial();
     }
 
     private Material getAnchorDisplayMaterial() {
-        String configured = getConfig().getString("visuals.display-material", "STONE");
-        Material material = Material.matchMaterial(configured);
-        if (material == null || !material.isBlock() || !material.isOccluding()) {
-            return Material.STONE;
-        }
-        return material;
+        return itemService.displayMaterial();
     }
 
     private Anchor spawnVisuals(Anchor anchor) {
-        Entity existingDisplay = anchor.visualId() == null ? null : Bukkit.getEntity(anchor.visualId());
-        Entity existingInteraction = anchor.interactionId() == null ? null : Bukkit.getEntity(anchor.interactionId());
-        UUID visualId = existingDisplay instanceof ItemDisplay ? existingDisplay.getUniqueId() : null;
-        UUID interactionId = existingInteraction instanceof Interaction ? existingInteraction.getUniqueId() : null;
-
-        if (existingDisplay instanceof ItemDisplay display) {
-            configureAnchorDisplay(display, anchor);
-        }
-        if (existingInteraction instanceof Interaction interaction) {
-            configureAnchorInteraction(interaction, anchor.id());
-        }
-
-        if (visualId == null) {
-            Location displayLocation = anchor.location().clone().add(0.5D, 0.5D, 0.5D);
-            ItemDisplay display = anchor.location().getWorld().spawn(displayLocation, ItemDisplay.class, entity -> {
-                configureAnchorDisplay(entity, anchor);
-            });
-            visualId = display.getUniqueId();
-        }
-
-        if (interactionId == null) {
-            Location interactionLocation = anchor.location().clone().add(0.5D, 0.2D, 0.5D);
-            Interaction interaction = anchor.location().getWorld().spawn(interactionLocation, Interaction.class,
-                    entity -> {
-                        configureAnchorInteraction(entity, anchor.id());
-                    });
-            interactionId = interaction.getUniqueId();
-        }
-
-        return new Anchor(anchor.id(), anchor.ownerId(), anchor.name(), anchor.location(), anchor.yaw(), anchor.pitch(),
-                anchor.createdAt(), anchor.sharedWith(), visualId, interactionId);
+        return visualService.spawn(anchor);
     }
 
     private void refreshAnchorVisuals() {
-        for (Anchor anchor : new ArrayList<>(anchorsById.values())) {
-            anchorsById.put(anchor.id(), spawnVisuals(anchor));
-        }
+        visualService.refreshAll();
         saveAnchors();
     }
 
-    private void configureAnchorDisplay(ItemDisplay entity, Anchor anchor) {
-        entity.teleport(anchor.location().clone().add(0.5D, 0.5D, 0.5D));
-        entity.setItemStack(createAnchorDisplayItem());
-        entity.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.FIXED);
-        float scaleX = (float) getConfig().getDouble("visuals.scale-x", 1.0D);
-        float scaleY = (float) getConfig().getDouble("visuals.scale-y", 0.877D);
-        float scaleZ = (float) getConfig().getDouble("visuals.scale-z", 1.0D);
-        entity.setTransformation(new org.bukkit.util.Transformation(
-                new org.joml.Vector3f(),
-                new org.joml.Quaternionf(),
-                new org.joml.Vector3f(scaleX, scaleY, scaleZ),
-                new org.joml.Quaternionf()));
-        entity.setGravity(false);
-        entity.setPersistent(true);
-        entity.setSilent(true);
-        entity.getPersistentDataContainer().set(anchorIdKey, PersistentDataType.STRING, anchor.id().toString());
-    }
-
-    private void configureAnchorInteraction(Interaction entity, UUID anchorId) {
-        entity.setInteractionWidth((float) getConfig().getDouble("visuals.interaction-width", 1.2D));
-        entity.setInteractionHeight((float) getConfig().getDouble("visuals.interaction-height", 1.1D));
-        entity.setGravity(false);
-        entity.setPersistent(true);
-        entity.setSilent(true);
-        entity.getPersistentDataContainer().set(anchorIdKey, PersistentDataType.STRING, anchorId.toString());
-    }
-
     private Optional<Anchor> anchorFromEntity(Entity entity) {
-        String raw = entity.getPersistentDataContainer().get(anchorIdKey, PersistentDataType.STRING);
-        if (raw == null) {
-            return Optional.empty();
-        }
-        try {
-            return Optional.ofNullable(anchorsById.get(UUID.fromString(raw)));
-        } catch (IllegalArgumentException ignored) {
-            return Optional.empty();
-        }
+        return visualService.fromEntity(entity);
     }
 
     private void removeEntity(UUID id) {
-        if (id == null) {
-            return;
-        }
-        Entity entity = Bukkit.getEntity(id);
-        if (entity != null) {
-            entity.remove();
-        }
-    }
-
-    private UUID readUuid(String raw) {
-        if (raw == null || raw.isBlank()) {
-            return null;
-        }
-        try {
-            return UUID.fromString(raw);
-        } catch (IllegalArgumentException ignored) {
-            return null;
-        }
+        visualService.removeEntity(id);
     }
 
     private void consumePlacedItem(Player player, EquipmentSlot hand) {
@@ -1774,8 +1286,7 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
     }
 
     private boolean sameWorld(Location left, Location right) {
-        return left.getWorld() != null && right.getWorld() != null
-                && left.getWorld().getUID().equals(right.getWorld().getUID());
+        return teleportCostService.sameWorld(left, right);
     }
 
     private String locationKey(Location location) {
@@ -1812,25 +1323,11 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
     }
 
     private void loadMessages() {
-        messages = YamlConfiguration.loadConfiguration(messagesFile);
-        try (InputStream stream = getResource("messages.yml")) {
-            if (stream == null) {
-                return;
-            }
-            YamlConfiguration defaults = YamlConfiguration.loadConfiguration(
-                    new InputStreamReader(stream, StandardCharsets.UTF_8));
-            messages.setDefaults(defaults);
-        } catch (IOException exception) {
-            getLogger().warning("Could not load default messages: " + exception.getMessage());
-        }
+        messageService.load();
     }
 
     private void send(CommandSender sender, String key, String... replacements) {
-        String text = messages.getString(key, key);
-        for (int i = 0; i + 1 < replacements.length; i += 2) {
-            text = text.replace(replacements[i], replacements[i + 1]);
-        }
-        sender.sendMessage(color(messages.getString("prefix", "") + text));
+        messageService.send(sender, key, replacements);
     }
 
     private void startIdleParticles() {
@@ -1885,7 +1382,7 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
 
                     Anchor refreshed = spawnVisuals(anchor);
                     if (!refreshed.equals(anchor)) {
-                        anchorsById.put(refreshed.id(), refreshed);
+                        anchorRepository.put(refreshed);
                         changed = true;
                     }
                 }
@@ -1918,114 +1415,29 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
         }
     }
 
-    private record Anchor(UUID id, UUID ownerId, String name, Location location, float yaw, float pitch, long createdAt,
-            Set<UUID> sharedWith, UUID visualId, UUID interactionId) {
-        Anchor {
-            sharedWith = Set.copyOf(sharedWith);
-        }
-
-        Anchor withName(String newName) {
-            return new Anchor(id, ownerId, newName, location, yaw, pitch, createdAt, sharedWith, visualId,
-                    interactionId);
-        }
-
-        Anchor withSharedPlayer(UUID playerId) {
-            Set<UUID> updated = new HashSet<>(sharedWith);
-            updated.add(playerId);
-            return new Anchor(id, ownerId, name, location, yaw, pitch, createdAt, updated, visualId, interactionId);
-        }
-
-        Anchor withoutSharedPlayer(UUID playerId) {
-            Set<UUID> updated = new HashSet<>(sharedWith);
-            updated.remove(playerId);
-            return new Anchor(id, ownerId, name, location, yaw, pitch, createdAt, updated, visualId, interactionId);
-        }
-    }
-
-    private record Cost(int requiredLevels, int experiencePoints, int shards) {
-    }
-
-    private record Validation(boolean ok, String messageKey, Location safeDestination, String[] replacements) {
-        static Validation ok(Location safeDestination) {
-            return new Validation(true, "", safeDestination, new String[0]);
-        }
-
-        static Validation fail(String messageKey, String... replacements) {
-            return new Validation(false, messageKey, null, replacements);
-        }
-    }
-
-    private static final class AnchorMenuHolder implements InventoryHolder {
-        private final UUID sourceAnchorId;
-
-        private AnchorMenuHolder(UUID sourceAnchorId) {
-            this.sourceAnchorId = sourceAnchorId;
-        }
-
-        @Override
-        public Inventory getInventory() {
-            return null;
-        }
-
-        private UUID sourceAnchorId() {
-            return sourceAnchorId;
-        }
-    }
-
-    private record SharedAnchorGroup(UUID ownerId, List<Anchor> anchors) {
-    }
-
-    private static final class SharedAnchorMenuHolder implements InventoryHolder {
-        private final UUID sourceAnchorId;
-        private final int page;
-
-        private SharedAnchorMenuHolder(UUID sourceAnchorId, int page) {
-            this.sourceAnchorId = sourceAnchorId;
-            this.page = page;
-        }
-
-        @Override
-        public Inventory getInventory() {
-            return null;
-        }
-
-        private UUID sourceAnchorId() {
-            return sourceAnchorId;
-        }
-
-        private int page() {
-            return page;
-        }
-    }
-
-    private static final class TrustMenuHolder implements InventoryHolder {
-        private final UUID anchorId;
-        private final int page;
-
-        private TrustMenuHolder(UUID anchorId, int page) {
-            this.anchorId = anchorId;
-            this.page = page;
-        }
-
-        @Override
-        public Inventory getInventory() {
-            return null;
-        }
-
-        private UUID anchorId() {
-            return anchorId;
-        }
-
-        private int page() {
-            return page;
-        }
-    }
-
     private final class Warmup {
         private final Player player;
         private final UUID sourceId;
         private final UUID targetId;
         private final Location startLocation;
+        private final Location lockLocation;
+        private final Location cameraStartLocation;
+        private final Location cameraEndLocation;
+        private final Location destinationAnchorLocation;
+        private final Vector facingDirection;
+        private final double baseRiseHeight;
+        private final double maxRiseHeight;
+        private final Entity fakePlayer;
+        private ArmorStand camera;
+        private final ItemDisplay flashDisplay;
+        private final boolean wasInvisible;
+        private final GameMode previousGameMode;
+        private int lastFlashStage = -1;
+        private int flashTicks;
+        private int flashFrameTotal;
+        private boolean destinationArrivalEffectPlayed;
+        private boolean destinationCameraSnapped;
+        private boolean playerCameraActive;
         private BukkitTask task;
 
         private Warmup(Player player, UUID sourceId, UUID targetId, Location startLocation, int seconds) {
@@ -2033,6 +1445,380 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
             this.sourceId = sourceId;
             this.targetId = targetId;
             this.startLocation = startLocation;
+            Anchor destinationAnchor = anchorsById.get(targetId);
+            this.destinationAnchorLocation = destinationAnchor == null
+                    ? startLocation.clone() : destinationAnchor.location().clone();
+            double maxBaseHeight = Math.max(1D,
+                    getConfig().getDouble("teleport.animation-base-height-max", 5D));
+            double configuredMaxHeight = Math.max(maxBaseHeight + 30D,
+                    getConfig().getDouble("teleport.animation-max-height", 35D));
+            double horizontalDistance = sameWorld(startLocation, destinationAnchorLocation)
+                    ? startLocation.distance(destinationAnchorLocation) : configuredMaxHeight * 2D;
+            // Nearby anchors use a lower first lift; distant anchors converge on
+            // the same capped cinematic height so duration never depends on distance.
+            this.baseRiseHeight = Math.min(maxBaseHeight,
+                    Math.max(2.5D, 2.5D + horizontalDistance * 0.02D));
+            this.maxRiseHeight = Math.min(configuredMaxHeight, baseRiseHeight + 30D);
+            double pushDistance = Math.max(0D,
+                    getConfig().getDouble("teleport.warmup-push-distance", 0.35D));
+            Vector backward = player.getLocation().getDirection().setY(0).normalize();
+            if (backward.lengthSquared() < 0.0001D) {
+                backward = new Vector(0, 0, -1);
+            }
+            this.facingDirection = backward.clone();
+            this.lockLocation = startLocation.clone().subtract(backward.multiply(pushDistance));
+            double eyeHeight = Math.max(1.0D, player.getEyeHeight());
+            // Keep the exact final player view (including yaw/pitch) when the
+            // client first enters spectator mode.
+            this.cameraStartLocation = startLocation.clone().add(0, eyeHeight, 0);
+            this.cameraEndLocation = startLocation.clone().subtract(facingDirection.clone().multiply(0.45D))
+                    .add(0, eyeHeight, 0);
+            this.wasInvisible = player.isInvisible();
+            this.previousGameMode = player.getGameMode();
+            this.fakePlayer = createFakePlayer(startLocation, player);
+            this.camera = createCamera(startLocation, player);
+            this.flashDisplay = createFlashDisplay(cameraStartLocation);
+            player.teleport(lockLocation);
+            player.setInvisible(true);
+            player.setGameMode(GameMode.SPECTATOR);
+            // Let the client receive the gamemode/entity spawn before selecting
+            // the camera target; otherwise the spectator camera can remain at
+            // the old player position on some Paper client combinations.
+            // The opening pull-out/rise uses the smooth ArmorStand camera.
+            // Once the first height is reached, the animation switches to
+            // direct player teleports for the discrete A/B/C states.
+            Bukkit.getScheduler().runTask(SoulAnchorPlugin.this, () -> {
+                if (player.isOnline() && camera.isValid()) {
+                    player.setSpectatorTarget(camera);
+                }
+            });
+            player.playSound(startLocation, Sound.BLOCK_SCULK_CATALYST_BLOOM, 0.8F, 0.8F);
+        }
+
+        private ArmorStand createCamera(Location soulLocation, Player player) {
+            Location cameraLocation = cameraStartLocation.clone();
+            cameraLocation.setYaw(soulLocation.getYaw());
+            cameraLocation.setPitch(soulLocation.getPitch());
+            return cameraLocation.getWorld().spawn(cameraLocation, ArmorStand.class, entity -> {
+                entity.setInvisible(true);
+                entity.setMarker(true);
+                entity.setGravity(false);
+                entity.setInvulnerable(true);
+                entity.setSilent(true);
+                entity.setCollidable(false);
+            });
+        }
+
+        private ItemDisplay createFlashDisplay(Location location) {
+            return location.getWorld().spawn(location, ItemDisplay.class, display -> {
+                display.setItemStack(createFlashStack(910000));
+                display.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.FIXED);
+                display.setBillboard(Display.Billboard.CENTER);
+                display.setViewRange(64F);
+                display.setBrightness(new Display.Brightness(15, 15));
+                display.setShadowStrength(0F);
+                display.setShadowRadius(0F);
+                display.setInterpolationDuration(1);
+                display.setInterpolationDelay(0);
+                display.setTransformation(new Transformation(
+                        new Vector3f(), new Quaternionf(), new Vector3f(0.01F), new Quaternionf()));
+                display.setInvisible(true);
+                display.setPersistent(false);
+            });
+        }
+
+        private Entity createFakePlayer(Location location, Player player) {
+            Player transientPlayer = TransientFakePlayer.trySpawn(player, location);
+            if (transientPlayer != null) {
+                return transientPlayer;
+            }
+            ArmorStand stand = location.getWorld().spawn(location, ArmorStand.class, entity -> {
+                entity.setVisible(true);
+                entity.setGravity(false);
+                entity.setInvulnerable(true);
+                entity.setSilent(true);
+                entity.setCollidable(false);
+                entity.setBasePlate(false);
+                entity.setArms(true);
+                entity.setCustomNameVisible(false);
+
+                // Plugin-only approximation of a suspended soul: tilt the body
+                // instead of relying on a client-side fake-player model.
+                double bodyTilt = Math.toRadians(60D);
+                entity.setBodyPose(new EulerAngle(bodyTilt, 0D, 0D));
+                entity.setHeadPose(new EulerAngle(Math.toRadians(-12D), 0D, 0D));
+                entity.setLeftArmPose(new EulerAngle(Math.toRadians(-18D), 0D, Math.toRadians(-10D)));
+                entity.setRightArmPose(new EulerAngle(Math.toRadians(-18D), 0D, Math.toRadians(10D)));
+                entity.setLeftLegPose(new EulerAngle(Math.toRadians(12D), 0D, Math.toRadians(-4D)));
+                entity.setRightLegPose(new EulerAngle(Math.toRadians(12D), 0D, Math.toRadians(4D)));
+
+                if (entity.getEquipment() != null) {
+                    entity.getEquipment().setHelmet(player.getInventory().getHelmet());
+                    entity.getEquipment().setChestplate(player.getInventory().getChestplate());
+                    entity.getEquipment().setLeggings(player.getInventory().getLeggings());
+                    entity.getEquipment().setBoots(player.getInventory().getBoots());
+                    entity.getEquipment().setItemInMainHand(player.getInventory().getItemInMainHand());
+                    entity.getEquipment().setItemInOffHand(player.getInventory().getItemInOffHand());
+                    ItemStack head = new ItemStack(Material.PLAYER_HEAD);
+                    SkullMeta meta = (SkullMeta) head.getItemMeta();
+                    if (meta != null) {
+                        meta.setOwningPlayer(player);
+                        head.setItemMeta(meta);
+                        entity.getEquipment().setHelmet(head);
+                    }
+                }
+            });
+            stand.setRotation(location.getYaw(), location.getPitch());
+            return stand;
+        }
+
+        private void playTickEffect(double progress) {
+            if (!player.isOnline()) {
+                return;
+            }
+            animateCamera(progress);
+            if (!playerCameraActive && camera.isValid()
+                    && player.getGameMode() == GameMode.SPECTATOR
+                    && player.getSpectatorTarget() != camera) {
+                player.setSpectatorTarget(camera);
+            } else if (playerCameraActive && player.getGameMode() == GameMode.SPECTATOR
+                    && player.getSpectatorTarget() != null) {
+                player.setSpectatorTarget(null);
+            }
+            updateFlashDisplay();
+        }
+
+        private void animateCamera(double progress) {
+            if (!camera.isValid()) {
+                return;
+            }
+
+            double clamped = Math.max(0D, Math.min(1D, progress));
+            double eyeHeight = Math.max(1.0D, player.getEyeHeight());
+            Location sourceGround = cameraEndLocation.clone();
+            Location sourceHigh = highLocation(sourceGround, maxRiseHeight);
+            Location destinationBase = destinationAnchorLocation.clone().add(0D, eyeHeight + baseRiseHeight, 0D);
+            Location destinationGround = destinationAnchorLocation.clone().add(0D, eyeHeight, 0D);
+            Location destinationHigh = destinationAnchorLocation.clone().add(0D, eyeHeight + maxRiseHeight, 0D);
+
+            // The normalized timeline is deliberately distance-independent.
+            // Only the first lift and the final landing are smooth. Every
+            // height state between them is an instant camera teleport.
+            if (clamped < 0.04D) {
+                Location next = interpolate(cameraStartLocation, sourceGround, smoothstep(clamped / 0.04D));
+                next.setDirection(cameraStartLocation.getDirection());
+                smoothCamera(next);
+                return;
+            }
+            if (clamped < 0.20D) {
+                Location firstHigh = highLocation(sourceGround, baseRiseHeight);
+                Location next = interpolate(sourceGround, firstHigh, smoothstep((clamped - 0.04D) / 0.16D));
+                next.setDirection(new Vector(0D, -1D, 0D));
+                smoothCamera(next);
+                return;
+            }
+            if (clamped < 0.26D) {
+                Location next = highLocation(sourceGround, baseRiseHeight + 0.20D
+                        * smoothstep((clamped - 0.20D) / 0.06D));
+                next.setDirection(new Vector(0D, -1D, 0D));
+                smoothCamera(next);
+                return;
+            }
+
+            // Ascending direction: three equal flash states. The camera is
+            // teleported to the new height at the state boundary; it never
+            // flies through the 15-block gap between states.
+            if (clamped < 0.56D) {
+                int stage = Math.min(2, (int) ((clamped - 0.26D) / 0.10D));
+                double stateHeight = baseRiseHeight + stage * 15D;
+                Location next = highLocation(sourceGround, Math.min(maxRiseHeight, stateHeight));
+                next.setDirection(new Vector(0D, -1D, 0D));
+                if (stage != lastFlashStage) {
+                    switchToPlayerCamera(next);
+                    lastFlashStage = stage;
+                    playFlashEffect(next, stage);
+                } else {
+                    teleportPlayerCamera(next);
+                }
+                return;
+            }
+
+            // Move only a short visible distance, then switch the camera to
+            // the destination high point in one server-side teleport.
+            if (clamped < 0.62D) {
+                double local = smoothstep((clamped - 0.56D) / 0.06D);
+                Location shortMove = sourceHigh.clone().add(
+                        destinationAnchorLocation.toVector().subtract(startLocation.toVector())
+                                .normalize().multiply(2.0D * local));
+                shortMove.setDirection(new Vector(0D, -1D, 0D));
+                if (clamped >= 0.59D) {
+                    if (!destinationCameraSnapped) {
+                        teleportPlayerCamera(destinationHigh);
+                        player.playSound(player.getLocation(), Sound.BLOCK_PORTAL_TRAVEL, 1.0F, 1.0F);
+                        destinationCameraSnapped = true;
+                    }
+                } else {
+                    teleportPlayerCamera(shortMove);
+                }
+                return;
+            }
+
+            // Descending direction: play the three height/flash states in
+            // reverse order. This is the inverse of the ascending sequence.
+            if (clamped < 0.92D) {
+                int stage = Math.min(2, (int) ((clamped - 0.62D) / 0.10D));
+                double stateHeight = baseRiseHeight + (2 - stage) * 15D;
+                Location next = destinationAnchorLocation.clone()
+                        .add(0D, eyeHeight + Math.min(maxRiseHeight, stateHeight), 0D);
+                next.setDirection(new Vector(0D, -1D, 0D));
+                if (stage != lastFlashStage) {
+                    teleportPlayerCamera(next);
+                    lastFlashStage = stage;
+                    playFlashEffect(next, stage);
+                } else {
+                    teleportPlayerCamera(next);
+                }
+                return;
+            }
+
+            // The final small drop is the reverse of the initial smooth lift.
+            Location next = interpolate(destinationBase, destinationGround,
+                    smoothstep((clamped - 0.92D) / 0.08D));
+            next.setDirection(new Vector(0D, -1D, 0D));
+            if (playerCameraActive) {
+                playerCameraActive = false;
+                camera.teleport(destinationBase);
+                if (player.isOnline() && player.getGameMode() == GameMode.SPECTATOR) {
+                    player.setSpectatorTarget(camera);
+                }
+            }
+            smoothCamera(next);
+        }
+
+        private void teleportPlayerCamera(Location eyeLocation) {
+            if (!player.isOnline()) {
+                return;
+            }
+            double eyeHeight = Math.max(1.0D, player.getEyeHeight());
+            Location playerLocation = eyeLocation.clone().subtract(0D, eyeHeight, 0D);
+            playerLocation.setYaw(eyeLocation.getYaw());
+            playerLocation.setPitch(eyeLocation.getPitch());
+            player.teleport(playerLocation);
+            if (camera != null && camera.isValid()) {
+                camera.teleport(eyeLocation);
+            }
+        }
+
+        private void smoothCamera(Location eyeLocation) {
+            if (camera != null && camera.isValid()) {
+                camera.teleport(eyeLocation);
+            }
+        }
+
+        private void switchToPlayerCamera(Location eyeLocation) {
+            playerCameraActive = true;
+            if (player.isOnline() && player.getGameMode() == GameMode.SPECTATOR) {
+                player.setSpectatorTarget(null);
+            }
+            teleportPlayerCamera(eyeLocation);
+        }
+
+        private Location highLocation(Location base, double rise) {
+            Location result = base.clone();
+            result.setY(base.getY() + rise);
+            return result;
+        }
+
+        private Vector interpolateDirection(Vector from, Vector to, double progress) {
+            return from.clone().multiply(1D - progress).add(to.clone().multiply(progress)).normalize();
+        }
+
+        private double smoothstep(double value) {
+            double clamped = Math.max(0D, Math.min(1D, value));
+            return clamped * clamped * (3D - 2D * clamped);
+        }
+
+        private void playFlashEffect(Location location, int highState) {
+            World world = location.getWorld();
+            if (world == null) {
+                return;
+            }
+            float pitch = 0.85F + highState * 0.18F;
+            world.playSound(location, Sound.BLOCK_END_PORTAL_FRAME_FILL, 1.0F, pitch);
+            if (player.isOnline()) {
+                // A flash is intentionally short: roughly 6 server ticks,
+                // independent of the configured animation update cadence.
+                long updateTicks = Math.max(1L, Math.min(4L,
+                        getConfig().getLong("teleport.animation-update-interval-ticks", 1L)));
+                flashFrameTotal = Math.max(2, (int) Math.ceil(6D / updateTicks));
+                flashTicks = flashFrameTotal;
+            }
+        }
+
+        private void updateFlashDisplay() {
+            if (flashDisplay == null || !flashDisplay.isValid()) {
+                return;
+            }
+            if (flashTicks <= 0 || !camera.isValid()) {
+                flashDisplay.setItemStack(createFlashStack(910000));
+                flashDisplay.setInvisible(true);
+                return;
+            }
+
+            Location cameraLocation = camera.getLocation();
+            Location displayLocation = cameraLocation.clone()
+                    .add(cameraLocation.getDirection().normalize().multiply(0.55D));
+            flashDisplay.teleport(displayLocation);
+            flashDisplay.setRotation(cameraLocation.getYaw(), cameraLocation.getPitch());
+
+            int frame = flashFrameTotal - flashTicks;
+            double t = flashFrameTotal <= 1 ? 1D : frame / (double) (flashFrameTotal - 1);
+            double envelope = Math.sin(Math.PI * Math.max(0D, Math.min(1D, t)));
+            // Symmetric flash: 0% -> 100% -> 0%.
+            float scale = (float) (8D + 42D * envelope);
+            flashDisplay.setTransformation(new Transformation(
+                    new Vector3f(), new Quaternionf(), new Vector3f(scale, scale, 0.08F), new Quaternionf()));
+            int alphaModel = envelope < 0.05D ? 910000
+                    : envelope < 0.20D ? 910001
+                    : envelope < 0.55D ? 910002
+                    : envelope < 0.85D ? 910003
+                    : envelope < 0.97D ? 910004 : 910005;
+            flashDisplay.setItemStack(createFlashStack(alphaModel));
+            flashDisplay.setInvisible(frame == 0 || frame >= flashFrameTotal - 1);
+            flashTicks--;
+        }
+
+        private ItemStack createFlashStack(int customModelData) {
+            ItemStack stack = new ItemStack(Material.PAPER);
+            ItemMeta meta = stack.getItemMeta();
+            if (meta != null) {
+                meta.setCustomModelData(customModelData);
+                stack.setItemMeta(meta);
+            }
+            return stack;
+        }
+
+        private Location interpolate(Location from, Location to, double progress) {
+            return from.clone().add(to.toVector().subtract(from.toVector()).multiply(progress));
+        }
+
+        private void finishEffect() {
+            restorePlayer();
+            removeFakePlayerVisual();
+            if (camera != null && camera.isValid()) {
+                camera.remove();
+            }
+            if (flashDisplay != null && flashDisplay.isValid()) {
+                flashDisplay.remove();
+            }
+        }
+
+        private void restorePlayer() {
+            if (player.isOnline()) {
+                player.setSpectatorTarget(null);
+                player.setGameMode(previousGameMode);
+                player.setInvisible(wasInvisible);
+            }
         }
 
         private void cancel(boolean notify) {
@@ -2040,9 +1826,31 @@ public final class SoulAnchorPlugin extends JavaPlugin implements Listener, Comm
             if (task != null) {
                 task.cancel();
             }
+            restorePlayer();
+            if (player.isOnline()) {
+                player.teleport(startLocation);
+            }
+            removeFakePlayerVisual();
+            if (camera != null && camera.isValid()) {
+                camera.remove();
+            }
+            if (flashDisplay != null && flashDisplay.isValid()) {
+                flashDisplay.remove();
+            }
             if (notify && player.isOnline()) {
                 send(player, "warmup-cancelled");
                 player.playSound(player.getLocation(), Sound.BLOCK_RESPAWN_ANCHOR_DEPLETE, 0.6F, 1F);
+            }
+        }
+
+        private void removeFakePlayerVisual() {
+            if (fakePlayer == null || !fakePlayer.isValid()) {
+                return;
+            }
+            if (fakePlayer instanceof Player fake) {
+                TransientFakePlayer.tryRemove(fake);
+            } else {
+                fakePlayer.remove();
             }
         }
     }

@@ -193,13 +193,13 @@ Run from the project root:
 On Windows, run `gradlew.bat clean build`. Gradle jar output:
 
 ```text
-build/libs/soul-anchor-1.0.4.jar
+build/libs/soul-anchor-1.0.5.jar
 ```
 
 The local workspace may also contain:
 
 ```text
-build/libs/soul-anchor-1.0.4.jar
+build/libs/soul-anchor-1.0.5.jar
 target/anchor_spawn_point_fixed.zip
 ```
 
