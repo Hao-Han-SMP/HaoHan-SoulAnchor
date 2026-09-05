@@ -1,4 +1,4 @@
-package dev.haohansmp.soulanchor.command;
+package vn.haohan.soulanchor.command;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -11,8 +11,8 @@ import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.util.StringUtil;
 
-import dev.haohansmp.soulanchor.domain.Anchor;
-import dev.haohansmp.soulanchor.SoulAnchorPlugin;
+import vn.haohan.soulanchor.domain.Anchor;
+import vn.haohan.soulanchor.SoulAnchorPlugin;
 
 /** Command parsing and permission checks. Gameplay state changes are delegated to the plugin services. */
 public final class SoulAnchorCommand {

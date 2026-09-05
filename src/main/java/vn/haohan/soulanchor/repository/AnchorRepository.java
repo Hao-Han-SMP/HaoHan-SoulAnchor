@@ -1,4 +1,4 @@
-package dev.haohansmp.soulanchor.repository;
+package vn.haohan.soulanchor.repository;
 
 import java.io.File;
 import java.io.IOException;
@@ -26,8 +26,8 @@ import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import dev.haohansmp.soulanchor.domain.Anchor;
-import dev.haohansmp.soulanchor.domain.SharedAnchorGroup;
+import vn.haohan.soulanchor.domain.Anchor;
+import vn.haohan.soulanchor.domain.SharedAnchorGroup;
 
 /** Owns anchor state, indexes, and persistence. The rest of the plugin never writes anchors.yml directly. */
 public final class AnchorRepository {

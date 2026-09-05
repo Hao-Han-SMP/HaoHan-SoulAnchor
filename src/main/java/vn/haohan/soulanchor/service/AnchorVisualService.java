@@ -1,4 +1,4 @@
-package dev.haohansmp.soulanchor.service;
+package vn.haohan.soulanchor.service;
 
 import java.util.ArrayList;
 import java.util.Map;
@@ -13,7 +13,7 @@ import org.bukkit.entity.ItemDisplay;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import dev.haohansmp.soulanchor.domain.Anchor;
+import vn.haohan.soulanchor.domain.Anchor;
 
 /** Manages the server-side entities that render and receive interaction for an anchor. */
 public final class AnchorVisualService {

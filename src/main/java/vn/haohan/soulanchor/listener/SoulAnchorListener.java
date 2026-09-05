@@ -1,4 +1,4 @@
-package dev.haohansmp.soulanchor.listener;
+package vn.haohan.soulanchor.listener;
 
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -23,7 +23,7 @@ import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 
-import dev.haohansmp.soulanchor.SoulAnchorPlugin;
+import vn.haohan.soulanchor.SoulAnchorPlugin;
 
 /** Bukkit adapter. Gameplay decisions stay in SoulAnchorPlugin/application services. */
 public final class SoulAnchorListener implements Listener {

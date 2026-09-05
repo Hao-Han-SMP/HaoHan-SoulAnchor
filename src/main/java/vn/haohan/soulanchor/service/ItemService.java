@@ -1,4 +1,4 @@
-package dev.haohansmp.soulanchor.service;
+package vn.haohan.soulanchor.service;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -21,7 +21,7 @@ import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import dev.haohansmp.soulanchor.domain.Anchor;
+import vn.haohan.soulanchor.domain.Anchor;
 
 /** Creates and reads all plugin-owned item data. NBT details do not leak into event handlers. */
 public final class ItemService {

@@ -1,4 +1,4 @@
-package dev.haohansmp.soulanchor.service;
+package vn.haohan.soulanchor.service;
 
 import java.util.List;
 import java.util.Locale;
@@ -12,7 +12,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import dev.haohansmp.soulanchor.domain.Cost;
+import vn.haohan.soulanchor.domain.Cost;
 
 /** Pure teleport economics and destination-safety rules. */
 public final class TeleportCostService {

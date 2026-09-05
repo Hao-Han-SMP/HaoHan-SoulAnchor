@@ -1,4 +1,4 @@
-package dev.haohansmp.soulanchor.domain;
+package vn.haohan.soulanchor.domain;
 
 import org.bukkit.Location;
 

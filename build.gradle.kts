@@ -2,7 +2,7 @@ plugins {
     java
 }
 
-group = "dev.haohansmp"
+group = "vn.haohan"
 version = "1.0.5"
 
 repositories {

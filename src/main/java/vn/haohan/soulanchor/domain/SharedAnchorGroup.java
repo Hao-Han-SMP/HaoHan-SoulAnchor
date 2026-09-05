@@ -1,4 +1,4 @@
-package dev.haohansmp.soulanchor.domain;
+package vn.haohan.soulanchor.domain;
 
 import java.util.List;
 import java.util.UUID;

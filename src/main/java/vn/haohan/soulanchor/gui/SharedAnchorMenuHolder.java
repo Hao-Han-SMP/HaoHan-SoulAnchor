@@ -1,4 +1,4 @@
-package dev.haohansmp.soulanchor.gui;
+package vn.haohan.soulanchor.gui;
 
 import java.util.UUID;
 
