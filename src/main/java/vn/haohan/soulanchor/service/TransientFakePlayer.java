@@ -19,6 +19,10 @@ public final class TransientFakePlayer {
 
     private TransientFakePlayer() {}
 
+    public static boolean isFakePlayer(UUID id) {
+        return id != null && NMS_PLAYERS.containsKey(id);
+    }
+
     public static Player trySpawn(Player source, Location location) {
         try {
             ClassLoader loader = Bukkit.getServer().getClass().getClassLoader();
@@ -28,8 +32,9 @@ public final class TransientFakePlayer {
             Class<?> profileClass = nms(loader, "com.mojang.authlib.GameProfile");
             Object minecraftServer = Bukkit.getServer().getClass().getMethod("getServer").invoke(Bukkit.getServer());
             Object serverLevel = location.getWorld().getClass().getMethod("getHandle").invoke(location.getWorld());
+            UUID fakeId = UUID.randomUUID();
             Object profile = profileClass.getConstructor(UUID.class, String.class)
-                    .newInstance(UUID.randomUUID(), source.getName());
+                    .newInstance(fakeId, source.getName());
             copySkinProperties(source, profile, profileClass, loader);
             Object clientInfo = clientInformation(loader);
             Object nmsPlayer = createServerPlayer(playerClass, serverClass, levelClass, profile, clientInfo,
@@ -43,7 +48,13 @@ public final class TransientFakePlayer {
             Object playerList = serverClass.getMethod("getPlayerList").invoke(minecraftServer);
             Method place = findMethod(playerList.getClass(), "placeNewPlayer", 3);
             if (place == null) return null;
-            place.invoke(playerList, connection, nmsPlayer, cookie);
+            NMS_PLAYERS.put(fakeId, nmsPlayer);
+            try {
+                place.invoke(playerList, connection, nmsPlayer, cookie);
+            } catch (Throwable t) {
+                NMS_PLAYERS.remove(fakeId);
+                throw t;
+            }
             Player fake = (Player) playerClass.getMethod("getBukkitEntity").invoke(nmsPlayer);
             fake.setGameMode(GameMode.SURVIVAL);
             fake.setRotation(location.getYaw(), location.getPitch());
@@ -52,7 +63,6 @@ public final class TransientFakePlayer {
             fake.setSilent(true);
             fake.setCustomNameVisible(false);
             setListed(playerClass, nmsPlayer, false);
-            NMS_PLAYERS.put(fake.getUniqueId(), nmsPlayer);
             return fake;
         } catch (Throwable ignored) {
             return null;

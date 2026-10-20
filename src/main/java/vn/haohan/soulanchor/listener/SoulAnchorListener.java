@@ -24,6 +24,7 @@ import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 
 import vn.haohan.soulanchor.SoulAnchorPlugin;
+import vn.haohan.soulanchor.service.TransientFakePlayer;
 
 /** Bukkit adapter. Gameplay decisions stay in SoulAnchorPlugin/application services. */
 public final class SoulAnchorListener implements Listener {
@@ -33,8 +34,14 @@ public final class SoulAnchorListener implements Listener {
         this.plugin = plugin;
     }
 
-    @EventHandler(ignoreCancelled = true)
-    public void onJoin(PlayerJoinEvent event) { plugin.onJoin(event); }
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onJoin(PlayerJoinEvent event) {
+        if (TransientFakePlayer.isFakePlayer(event.getPlayer().getUniqueId())) {
+            event.joinMessage(null);
+            return;
+        }
+        plugin.onJoin(event);
+    }
 
     @EventHandler(ignoreCancelled = true, priority = EventPriority.HIGH)
     public void onPlace(BlockPlaceEvent event) { plugin.onPlace(event); }
@@ -87,6 +94,12 @@ public final class SoulAnchorListener implements Listener {
     @EventHandler
     public void onWardenDeath(EntityDeathEvent event) { plugin.onWardenDeath(event); }
 
-    @EventHandler
-    public void onQuit(PlayerQuitEvent event) { plugin.onQuit(event); }
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onQuit(PlayerQuitEvent event) {
+        if (TransientFakePlayer.isFakePlayer(event.getPlayer().getUniqueId())) {
+            event.quitMessage(null);
+            return;
+        }
+        plugin.onQuit(event);
+    }
 }
