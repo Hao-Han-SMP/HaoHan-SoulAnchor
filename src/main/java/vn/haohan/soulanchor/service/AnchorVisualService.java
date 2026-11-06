@@ -28,34 +28,80 @@ public final class AnchorVisualService {
     }
 
     public Anchor spawn(Anchor anchor) {
-        Entity existingDisplay = anchor.visualId() == null ? null : Bukkit.getEntity(anchor.visualId());
-        Entity existingInteraction = anchor.interactionId() == null ? null : Bukkit.getEntity(anchor.interactionId());
-        UUID visualId = existingDisplay instanceof ItemDisplay ? existingDisplay.getUniqueId() : null;
-        UUID interactionId = existingInteraction instanceof Interaction ? existingInteraction.getUniqueId() : null;
+        if (anchor.location().getWorld() == null) {
+            return anchor;
+        }
+        Location displayLoc = anchor.location().clone().add(0.5D, 0.5D, 0.5D);
+        if (!displayLoc.isChunkLoaded()) {
+            return anchor;
+        }
 
-        if (existingDisplay instanceof ItemDisplay display) {
-            configureDisplay(display, anchor);
+        ItemDisplay display = null;
+        Interaction interaction = null;
+
+        Entity existingDisplay = anchor.visualId() == null ? null : Bukkit.getEntity(anchor.visualId());
+        if (existingDisplay instanceof ItemDisplay d && d.isValid() && !d.isDead()) {
+            display = d;
         }
-        if (existingInteraction instanceof Interaction interaction) {
-            configureInteraction(interaction, anchor.id());
+        Entity existingInteraction = anchor.interactionId() == null ? null : Bukkit.getEntity(anchor.interactionId());
+        if (existingInteraction instanceof Interaction i && i.isValid() && !i.isDead()) {
+            interaction = i;
         }
-        if (visualId == null) {
-            ItemDisplay display = anchor.location().getWorld().spawn(
-                    anchor.location().clone().add(0.5D, 0.5D, 0.5D), ItemDisplay.class,
+
+        // Search nearby to discover existing entities by PDC tag and prune any duplicate overlays.
+        for (Entity e : displayLoc.getWorld().getNearbyEntities(displayLoc, 1.0D, 1.0D, 1.0D)) {
+            String tag = e.getPersistentDataContainer().get(items.anchorIdKey(), PersistentDataType.STRING);
+            if (!anchor.id().toString().equals(tag)) {
+                continue;
+            }
+            if (e instanceof ItemDisplay d && d.isValid() && !d.isDead()) {
+                if (display == null) {
+                    display = d;
+                } else if (!display.getUniqueId().equals(d.getUniqueId())) {
+                    d.remove();
+                }
+            } else if (e instanceof Interaction i && i.isValid() && !i.isDead()) {
+                if (interaction == null) {
+                    interaction = i;
+                } else if (!interaction.getUniqueId().equals(i.getUniqueId())) {
+                    i.remove();
+                }
+            }
+        }
+
+        if (display == null) {
+            display = displayLoc.getWorld().spawn(
+                    displayLoc, ItemDisplay.class,
                     entity -> configureDisplay(entity, anchor));
-            visualId = display.getUniqueId();
+        } else {
+            if (display.getLocation().distanceSquared(displayLoc) > 0.001D) {
+                display.teleport(displayLoc);
+            }
         }
-        if (interactionId == null) {
-            Interaction interaction = anchor.location().getWorld().spawn(
-                    anchor.location().clone().add(0.5D, 0.2D, 0.5D), Interaction.class,
+
+        Location interactionLoc = anchor.location().clone().add(0.5D, 0.2D, 0.5D);
+        if (interaction == null) {
+            interaction = anchor.location().getWorld().spawn(
+                    interactionLoc, Interaction.class,
                     entity -> configureInteraction(entity, anchor.id()));
-            interactionId = interaction.getUniqueId();
+        } else {
+            if (interaction.getLocation().distanceSquared(interactionLoc) > 0.001D) {
+                interaction.teleport(interactionLoc);
+            }
         }
-        return anchor.withVisuals(visualId, interactionId);
+        return anchor.withVisuals(display.getUniqueId(), interaction.getUniqueId());
     }
 
     public void refreshAll() {
         for (Anchor anchor : new ArrayList<>(anchors.values())) {
+            Entity display = anchor.visualId() == null ? null : Bukkit.getEntity(anchor.visualId());
+            if (display instanceof ItemDisplay d && d.isValid()) {
+                configureDisplay(d, anchor);
+            }
+            Entity interaction = anchor.interactionId() == null ? null : Bukkit.getEntity(anchor.interactionId());
+            if (interaction instanceof Interaction i && i.isValid()) {
+                configureInteraction(i, anchor.id());
+            }
             anchors.put(anchor.id(), spawn(anchor));
         }
     }
@@ -82,6 +128,24 @@ public final class AnchorVisualService {
         }
     }
 
+    public void cleanupLocation(Anchor anchor) {
+        if (anchor == null || anchor.location() == null || anchor.location().getWorld() == null) {
+            return;
+        }
+        Location loc = anchor.location().clone().add(0.5D, 0.5D, 0.5D);
+        if (!loc.isChunkLoaded()) {
+            return;
+        }
+        for (Entity e : loc.getWorld().getNearbyEntities(loc, 1.0D, 1.0D, 1.0D)) {
+            String tag = e.getPersistentDataContainer().get(items.anchorIdKey(), PersistentDataType.STRING);
+            if (anchor.id().toString().equals(tag)
+                    || (anchor.visualId() != null && anchor.visualId().equals(e.getUniqueId()))
+                    || (anchor.interactionId() != null && anchor.interactionId().equals(e.getUniqueId()))) {
+                e.remove();
+            }
+        }
+    }
+
     private void configureDisplay(ItemDisplay entity, Anchor anchor) {
         entity.teleport(anchor.location().clone().add(0.5D, 0.5D, 0.5D));
         entity.setItemStack(items.createAnchorDisplayItem());
@@ -92,6 +156,11 @@ public final class AnchorVisualService {
         entity.setTransformation(new org.bukkit.util.Transformation(
                 new org.joml.Vector3f(), new org.joml.Quaternionf(),
                 new org.joml.Vector3f(scaleX, scaleY, scaleZ), new org.joml.Quaternionf()));
+        entity.setDisplayWidth(2.0F);
+        entity.setDisplayHeight(2.0F);
+        entity.setViewRange(64.0F);
+        entity.setBrightness(new org.bukkit.entity.Display.Brightness(15, 15));
+        entity.setInterpolationDuration(0);
         entity.setGravity(false);
         entity.setPersistent(true);
         entity.setSilent(true);

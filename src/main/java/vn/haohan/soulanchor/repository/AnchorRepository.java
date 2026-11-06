@@ -148,10 +148,16 @@ public final class AnchorRepository {
     }
 
     public boolean isStillPlaced(Anchor anchor, Material blockMaterial) {
-        return anchor != null
-                && byId.containsKey(anchor.id())
-                && anchor.location().getBlock().getType() == blockMaterial
-                && byLocation.containsKey(locationKey(anchor.location()));
+        if (anchor == null || !byId.containsKey(anchor.id()) || !byLocation.containsKey(locationKey(anchor.location()))) {
+            return false;
+        }
+        if (anchor.location().getWorld() == null) {
+            return false;
+        }
+        if (!anchor.location().isChunkLoaded()) {
+            return true;
+        }
+        return anchor.location().getBlock().getType() == blockMaterial;
     }
 
     public void put(Anchor anchor) {

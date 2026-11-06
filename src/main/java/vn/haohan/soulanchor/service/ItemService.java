@@ -141,6 +141,7 @@ public final class ItemService {
         if (itemModel != null) {
             meta.setItemModel(itemModel);
         }
+        meta.setCustomModelData(plugin.getConfig().getInt("item.custom-model-data", 910001));
         item.setItemMeta(meta);
         return item;
     }

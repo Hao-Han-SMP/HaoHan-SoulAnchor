@@ -1119,6 +1119,10 @@ public final class SoulAnchorPlugin extends JavaPlugin implements CommandExecuto
     }
 
     private void removeAnchor(UUID id) {
+        Anchor anchor = anchorsById.get(id);
+        if (anchor != null) {
+            visualService.cleanupLocation(anchor);
+        }
         anchorRepository.remove(id, this::removeEntity);
     }
 
@@ -1478,6 +1482,7 @@ public final class SoulAnchorPlugin extends JavaPlugin implements CommandExecuto
             this.fakePlayer = createFakePlayer(startLocation, player);
             this.camera = createCamera(startLocation, player);
             this.flashDisplay = createFlashDisplay(cameraStartLocation);
+            playFlashEffect(cameraStartLocation, 0);
             player.teleport(lockLocation);
             player.setInvisible(true);
             player.setGameMode(GameMode.SPECTATOR);
@@ -1502,10 +1507,14 @@ public final class SoulAnchorPlugin extends JavaPlugin implements CommandExecuto
             return cameraLocation.getWorld().spawn(cameraLocation, ArmorStand.class, entity -> {
                 entity.setInvisible(true);
                 entity.setMarker(true);
+                entity.setSmall(true);
+                entity.setBasePlate(false);
+                entity.setArms(false);
                 entity.setGravity(false);
                 entity.setInvulnerable(true);
                 entity.setSilent(true);
                 entity.setCollidable(false);
+                entity.setCustomNameVisible(false);
             });
         }
 
@@ -1515,11 +1524,13 @@ public final class SoulAnchorPlugin extends JavaPlugin implements CommandExecuto
                 display.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.FIXED);
                 display.setBillboard(Display.Billboard.CENTER);
                 display.setViewRange(64F);
+                display.setDisplayWidth(16.0F);
+                display.setDisplayHeight(16.0F);
                 display.setBrightness(new Display.Brightness(15, 15));
                 display.setShadowStrength(0F);
                 display.setShadowRadius(0F);
                 display.setInterpolationDuration(1);
-                display.setInterpolationDelay(0);
+                display.setInterpolationDelay(-1);
                 display.setTransformation(new Transformation(
                         new Vector3f(), new Quaternionf(), new Vector3f(0.01F), new Quaternionf()));
                 display.setInvisible(true);
@@ -1528,48 +1539,8 @@ public final class SoulAnchorPlugin extends JavaPlugin implements CommandExecuto
         }
 
         private Entity createFakePlayer(Location location, Player player) {
-            Player transientPlayer = TransientFakePlayer.trySpawn(player, location);
-            if (transientPlayer != null) {
-                return transientPlayer;
-            }
-            ArmorStand stand = location.getWorld().spawn(location, ArmorStand.class, entity -> {
-                entity.setVisible(true);
-                entity.setGravity(false);
-                entity.setInvulnerable(true);
-                entity.setSilent(true);
-                entity.setCollidable(false);
-                entity.setBasePlate(false);
-                entity.setArms(true);
-                entity.setCustomNameVisible(false);
-
-                // Plugin-only approximation of a suspended soul: tilt the body
-                // instead of relying on a client-side fake-player model.
-                double bodyTilt = Math.toRadians(60D);
-                entity.setBodyPose(new EulerAngle(bodyTilt, 0D, 0D));
-                entity.setHeadPose(new EulerAngle(Math.toRadians(-12D), 0D, 0D));
-                entity.setLeftArmPose(new EulerAngle(Math.toRadians(-18D), 0D, Math.toRadians(-10D)));
-                entity.setRightArmPose(new EulerAngle(Math.toRadians(-18D), 0D, Math.toRadians(10D)));
-                entity.setLeftLegPose(new EulerAngle(Math.toRadians(12D), 0D, Math.toRadians(-4D)));
-                entity.setRightLegPose(new EulerAngle(Math.toRadians(12D), 0D, Math.toRadians(4D)));
-
-                if (entity.getEquipment() != null) {
-                    entity.getEquipment().setHelmet(player.getInventory().getHelmet());
-                    entity.getEquipment().setChestplate(player.getInventory().getChestplate());
-                    entity.getEquipment().setLeggings(player.getInventory().getLeggings());
-                    entity.getEquipment().setBoots(player.getInventory().getBoots());
-                    entity.getEquipment().setItemInMainHand(player.getInventory().getItemInMainHand());
-                    entity.getEquipment().setItemInOffHand(player.getInventory().getItemInOffHand());
-                    ItemStack head = new ItemStack(Material.PLAYER_HEAD);
-                    SkullMeta meta = (SkullMeta) head.getItemMeta();
-                    if (meta != null) {
-                        meta.setOwningPlayer(player);
-                        head.setItemMeta(meta);
-                        entity.getEquipment().setHelmet(head);
-                    }
-                }
-            });
-            stand.setRotation(location.getYaw(), location.getPitch());
-            return stand;
+            // Never spawn an ArmorStand: the user requested to hide the ArmorStand 100%.
+            return TransientFakePlayer.trySpawn(player, location);
         }
 
         private void playTickEffect(double progress) {
@@ -1656,6 +1627,7 @@ public final class SoulAnchorPlugin extends JavaPlugin implements CommandExecuto
                         teleportPlayerCamera(destinationHigh);
                         player.playSound(player.getLocation(), Sound.BLOCK_PORTAL_TRAVEL, 1.0F, 1.0F);
                         destinationCameraSnapped = true;
+                        playFlashEffect(destinationHigh, 2);
                     }
                 } else {
                     teleportPlayerCamera(shortMove);
@@ -1691,6 +1663,10 @@ public final class SoulAnchorPlugin extends JavaPlugin implements CommandExecuto
                 if (player.isOnline() && player.getGameMode() == GameMode.SPECTATOR) {
                     player.setSpectatorTarget(camera);
                 }
+            }
+            if (!destinationArrivalEffectPlayed && clamped >= 0.94D) {
+                destinationArrivalEffectPlayed = true;
+                playFlashEffect(destinationGround, 0);
             }
             smoothCamera(next);
         }
@@ -1746,11 +1722,10 @@ public final class SoulAnchorPlugin extends JavaPlugin implements CommandExecuto
             float pitch = 0.85F + highState * 0.18F;
             world.playSound(location, Sound.BLOCK_END_PORTAL_FRAME_FILL, 1.0F, pitch);
             if (player.isOnline()) {
-                // A flash is intentionally short: roughly 6 server ticks,
-                // independent of the configured animation update cadence.
+                // Snappy lightning flash: roughly 7 ticks total, independent of cadence
                 long updateTicks = Math.max(1L, Math.min(4L,
                         getConfig().getLong("teleport.animation-update-interval-ticks", 1L)));
-                flashFrameTotal = Math.max(2, (int) Math.ceil(6D / updateTicks));
+                flashFrameTotal = Math.max(5, (int) Math.ceil(7D / updateTicks));
                 flashTicks = flashFrameTotal;
             }
         }
@@ -1759,32 +1734,41 @@ public final class SoulAnchorPlugin extends JavaPlugin implements CommandExecuto
             if (flashDisplay == null || !flashDisplay.isValid()) {
                 return;
             }
-            if (flashTicks <= 0 || !camera.isValid()) {
+            if (flashTicks <= 0) {
                 flashDisplay.setItemStack(createFlashStack(910000));
                 flashDisplay.setInvisible(true);
                 return;
             }
 
-            Location cameraLocation = camera.getLocation();
-            Location displayLocation = cameraLocation.clone()
-                    .add(cameraLocation.getDirection().normalize().multiply(0.55D));
+            Location eyeLoc = playerCameraActive && player.isOnline()
+                    ? player.getEyeLocation()
+                    : (camera != null && camera.isValid() ? camera.getLocation()
+                    : (player.isOnline() ? player.getEyeLocation() : null));
+            if (eyeLoc == null) {
+                flashDisplay.setItemStack(createFlashStack(910000));
+                flashDisplay.setInvisible(true);
+                return;
+            }
+
+            Location displayLocation = eyeLoc.clone()
+                    .add(eyeLoc.getDirection().normalize().multiply(0.55D));
             flashDisplay.teleport(displayLocation);
-            flashDisplay.setRotation(cameraLocation.getYaw(), cameraLocation.getPitch());
+            flashDisplay.setRotation(eyeLoc.getYaw(), eyeLoc.getPitch());
 
             int frame = flashFrameTotal - flashTicks;
             double t = flashFrameTotal <= 1 ? 1D : frame / (double) (flashFrameTotal - 1);
-            double envelope = Math.sin(Math.PI * Math.max(0D, Math.min(1D, t)));
-            // Symmetric flash: 0% -> 100% -> 0%.
+            // Snappy lightning burst: quick rise to peak whiteout at t~0.18, smooth fast decay
+            double envelope = t < 0.18D ? (t / 0.18D) : Math.pow(Math.max(0D, 1.0D - (t - 0.18D) / 0.82D), 1.3D);
             float scale = (float) (8D + 42D * envelope);
             flashDisplay.setTransformation(new Transformation(
                     new Vector3f(), new Quaternionf(), new Vector3f(scale, scale, 0.08F), new Quaternionf()));
-            int alphaModel = envelope < 0.05D ? 910000
-                    : envelope < 0.20D ? 910001
-                    : envelope < 0.55D ? 910002
-                    : envelope < 0.85D ? 910003
-                    : envelope < 0.97D ? 910004 : 910005;
+            int alphaModel = envelope <= 0.02D ? 910000
+                    : envelope < 0.25D ? 910001
+                    : envelope < 0.50D ? 910002
+                    : envelope < 0.75D ? 910003
+                    : envelope < 0.90D ? 910004 : 910005;
             flashDisplay.setItemStack(createFlashStack(alphaModel));
-            flashDisplay.setInvisible(frame == 0 || frame >= flashFrameTotal - 1);
+            flashDisplay.setInvisible(envelope <= 0.02D);
             flashTicks--;
         }
 
@@ -1809,7 +1793,23 @@ public final class SoulAnchorPlugin extends JavaPlugin implements CommandExecuto
                 camera.remove();
             }
             if (flashDisplay != null && flashDisplay.isValid()) {
-                flashDisplay.remove();
+                if (flashTicks > 0) {
+                    new BukkitRunnable() {
+                        @Override
+                        public void run() {
+                            if (!player.isOnline() || flashTicks <= 0) {
+                                if (flashDisplay.isValid()) {
+                                    flashDisplay.remove();
+                                }
+                                cancel();
+                                return;
+                            }
+                            updateFlashDisplay();
+                        }
+                    }.runTaskTimer(SoulAnchorPlugin.this, 1L, 1L);
+                } else {
+                    flashDisplay.remove();
+                }
             }
         }
 
